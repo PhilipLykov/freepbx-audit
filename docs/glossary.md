@@ -27,6 +27,7 @@
 | **Idle Timeout** | The maximum number of seconds of inactivity before a session is considered timed out. Default: 1800 seconds (30 minutes). Configurable via `audit_session_idle_timeout_seconds`. |
 | **Immutability Trigger** | A database `BEFORE UPDATE` or `BEFORE DELETE` trigger that raises an error to prevent modification of audit records. Three triggers protect `audit_events` (update + delete) and `audit_sessions` (delete). |
 | **myConfigPageInits** | A FreePBX BMO method that returns a list of module display names the module wants to receive `doConfigPageInit` calls for. The audit module registers for all active module pages dynamically. |
+| **ODBC** | Open Database Connectivity. A standard API for database access. The audit module supports `pdo_odbc` as an alternative to native `pdo_mysql`/`pdo_pgsql` drivers, with the actual database engine specified via `audit_db_odbc_backend` or auto-detected from the server version string. |
 | **Object ID** | An identifier for the entity being acted upon (e.g., extension number, user ID, backup ID). Extracted from `$_REQUEST` using a priority-ordered list of common parameter names. |
 | **Object Type** | The category of entity being acted upon. Typically the lowercase module name (e.g., `core`, `userman`, `backup`). |
 | **Outcome** | The result of an audited action: `success` or `failure`. |

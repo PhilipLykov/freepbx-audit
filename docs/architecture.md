@@ -182,7 +182,7 @@ graph TD
 
     Browser2 -->|HTTPS| PBX
     PBX --> PBX_PHP --> PBX_Module
-    PBX_Module -->|"TLS PDO (port 3306/5432)"| AuditDB3
+    PBX_Module -->|"TLS PDO or ODBC (port 3306/5432)"| AuditDB3
 ```
 
 ### Network Requirements
@@ -200,9 +200,10 @@ graph TD
 |-------|-----------|---------|
 | Platform | FreePBX / pbxACT | 17.x (Framework >= 17.0.1) |
 | Runtime | PHP | 7.4+ (8.1+ recommended) |
-| Database driver | PDO | `pdo_mysql` and/or `pdo_pgsql` |
+| Database driver | PDO | `pdo_mysql`, `pdo_pgsql`, or `pdo_odbc` |
+| ODBC (optional) | unixODBC | System ODBC layer with MariaDB/PostgreSQL driver |
 | Audit DB | MariaDB or PostgreSQL | 10.5+ / 14+ |
-| Transport security | TLS | Required for remote audit DB |
+| Transport security | TLS | Required for remote audit DB (native PDO or ODBC driver-level) |
 | Client-side | Vanilla JavaScript | ES5 compatible (no dependencies) |
 | CSS | Vanilla CSS | Scoped with `audit-` prefix |
 
@@ -220,3 +221,4 @@ graph TD
 | **Three-tier redaction (substring/exact/suffix)** | Balances thoroughness (catches `sip_password`, `vm_pass`) with precision (avoids false positives on `cert_id`, `pinsets_id`) |
 | **Deduplication window (3 seconds)** | Prevents duplicate events from multi-channel capture (e.g., GUI POST triggers both `doConfigPageInit` and a BMO hook) without losing genuinely repeated actions |
 | **PHP `time()` for timestamps** | Server clock authority; UTC + local (Europe/Chisinau) stored for every event |
+| **ODBC support via pdo_odbc** | Enterprises that mandate centralized ODBC data sources or need driver-level TLS management can connect without native PDO drivers; backend engine auto-detected or explicitly configured |

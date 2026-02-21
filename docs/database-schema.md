@@ -138,6 +138,23 @@ Stores one row per audit event. Fully immutable after insertion.
 | Index creation | `safeExec()` with duplicate detection | `CREATE INDEX IF NOT EXISTS` |
 | Trigger syntax | `SIGNAL SQLSTATE '45000'` | `RAISE EXCEPTION` via PL/pgSQL function |
 
+### ODBC Connections
+
+When connecting via `pdo_odbc`, the module uses the same SQL dialect as the underlying
+database engine. The engine is determined by the `audit_db_odbc_backend` config setting
+(`mysql` or `pgsql`), or auto-detected via `SELECT version()`. All DDL, trigger syntax,
+and index creation follows the same paths as native PDO connections to the corresponding
+engine.
+
+ODBC-specific considerations:
+
+| Aspect | Notes |
+|--------|-------|
+| TLS/Encryption | Configured at the ODBC driver level in `odbc.ini` / `odbcinst.ini`, not in the PDO DSN |
+| Driver name | `PDO::ATTR_DRIVER_NAME` returns `odbc`; the module resolves the real engine internally |
+| Trigger creation | Requires the ODBC user to have `CREATE TRIGGER` (or `SUPER`) privilege during initial schema setup |
+| Connection pooling | ODBC connection pooling is controlled by `unixODBC` (`Pooling=Yes` in `odbcinst.ini`) |
+
 ---
 
 ## Indexes

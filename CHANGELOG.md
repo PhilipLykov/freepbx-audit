@@ -7,6 +7,12 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+
+- **ODBC database connection support** via `pdo_odbc`. The module can now connect to the audit database through Linux system ODBC data sources (`unixODBC`), enabling centralized driver-level TLS management and compliance with enterprise ODBC-only policies.
+- New config key `audit_db_odbc_backend` (`mysql` / `pgsql`) to explicitly specify the database engine behind an ODBC connection when auto-detection is insufficient.
+- Automatic ODBC backend detection via `SELECT version()` and `PDO::ATTR_SERVER_VERSION` heuristics, with fallback to `mysql`.
+
 ## [0.1.0-alpha] - 20-02-2026
 
 ### Added

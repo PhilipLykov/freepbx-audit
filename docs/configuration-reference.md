@@ -30,11 +30,17 @@ production).
 **Examples**:
 
 ```bash
-# MariaDB/MySQL
+# MariaDB/MySQL (native PDO driver)
 fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
 
-# PostgreSQL
+# PostgreSQL (native PDO driver)
 fwconsole setting AUDITCOMPLIANCE_DB_DSN "pgsql:host=audit-db.example.com;port=5432;dbname=auditcompliance;sslmode=require"
+
+# ODBC -- using a system DSN defined in /etc/odbc.ini
+fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:AuditDB"
+
+# ODBC -- inline connection string (driver-level, no odbc.ini entry needed)
+fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:Driver=MariaDB Unicode;Server=audit-db.example.com;Port=3306;Database=auditcompliance;Charset=utf8mb4"
 ```
 
 ---
@@ -80,6 +86,41 @@ exception is thrown and the connection is refused.
 
 **Recommendation**: Always leave enabled in production. Disable only for local development
 with a non-networked database.
+
+**Note**: When using an ODBC DSN (`odbc:...`), TLS validation is skipped at the PDO level
+because ODBC encryption is configured in the system ODBC driver configuration
+(`odbcinst.ini` / `odbc.ini`), not in the PDO DSN string.
+
+---
+
+### `audit_db_odbc_backend`
+
+| Property | Value |
+|----------|-------|
+| Type | String |
+| Default | `''` (empty -- auto-detect) |
+| Allowed values | `mysql`, `mariadb`, `pgsql`, `postgresql`, `postgres`, or empty |
+| Set via | `fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"` |
+| Required when | Using an ODBC DSN (`odbc:...`) |
+
+**Description**: When connecting via ODBC, the PDO driver name is always `odbc`, so the
+module cannot automatically determine which SQL dialect to use for DDL, triggers, and
+indexes. This setting tells the module which database engine sits behind the ODBC driver.
+
+If left empty, the module attempts auto-detection via `SELECT version()` and
+`PDO::ATTR_SERVER_VERSION`. If auto-detection fails, it defaults to `mysql`.
+
+**Recommendation**: Always set explicitly when using ODBC to avoid ambiguity.
+
+**Examples**:
+
+```bash
+# ODBC to MariaDB
+fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"
+
+# ODBC to PostgreSQL
+fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "pgsql"
+```
 
 ---
 
@@ -130,6 +171,18 @@ fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=audit-db.prod.internal;port
 fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
 fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
 fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+fwconsole setting AUDITCOMPLIANCE_SESSION_IDLE_TIMEOUT_SECONDS "1800"
+```
+
+### Production (ODBC)
+
+```bash
+# ODBC to MariaDB via system DSN "AuditDB" defined in /etc/odbc.ini
+fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:AuditDB"
+fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
+fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
+fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"
 fwconsole setting AUDITCOMPLIANCE_SESSION_IDLE_TIMEOUT_SECONDS "1800"
 ```
 

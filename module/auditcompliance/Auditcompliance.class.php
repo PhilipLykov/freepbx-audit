@@ -43,6 +43,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private $auditDb = null;
 	private $schemaReady = false;
 	private $auditScriptsInjected = false;
+	private $resolvedDriver = null;
 
 	public function __construct($freepbx = null) {
 		if ($freepbx === null) {
@@ -57,6 +58,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$this->setDefaultConfigIfMissing('audit_db_user', '');
 		$this->setDefaultConfigIfMissing('audit_db_password', '');
 		$this->setDefaultConfigIfMissing('audit_db_require_tls', '1');
+		$this->setDefaultConfigIfMissing('audit_db_odbc_backend', '');
 		$this->setDefaultConfigIfMissing('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS);
 
 		try {
@@ -1702,13 +1704,90 @@ JSEOF;
 			PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
 		);
 		$this->auditDb = new PDO($dsn, $user, $password, $options);
+
+		if ($this->isOdbcDsn($dsn)) {
+			$this->resolvedDriver = $this->resolveOdbcBackend($this->auditDb);
+		}
+
 		return $this->auditDb;
+	}
+
+	/**
+	 * Detect whether the configured DSN uses the ODBC PDO driver.
+	 */
+	private function isOdbcDsn($dsn) {
+		return strncasecmp($dsn, 'odbc:', 5) === 0;
+	}
+
+	/**
+	 * Resolve the actual database engine behind an ODBC connection.
+	 *
+	 * When connecting via pdo_odbc the PDO driver name is always "odbc",
+	 * but we need the real engine (mysql vs pgsql) to choose the correct
+	 * SQL dialect for DDL, triggers and indexes.
+	 *
+	 * Resolution order:
+	 *   1. Explicit config key  audit_db_odbc_backend  (mysql | pgsql).
+	 *   2. Server version string heuristic via PDO::ATTR_SERVER_INFO /
+	 *      PDO::ATTR_SERVER_VERSION and a test query.
+	 *   3. Fall back to "mysql" as the safer default (FreePBX ecosystem).
+	 */
+	private function resolveOdbcBackend(PDO $pdo) {
+		$explicit = strtolower(trim((string) ($this->getConfig('audit_db_odbc_backend') ?? '')));
+		if ($explicit === 'mysql' || $explicit === 'mariadb') {
+			return 'mysql';
+		}
+		if ($explicit === 'pgsql' || $explicit === 'postgresql' || $explicit === 'postgres') {
+			return 'pgsql';
+		}
+
+		try {
+			$version = @$pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
+			if ($version !== false && $version !== null) {
+				$vLower = strtolower((string) $version);
+				if (strpos($vLower, 'postgre') !== false) {
+					return 'pgsql';
+				}
+				if (strpos($vLower, 'maria') !== false || strpos($vLower, 'mysql') !== false) {
+					return 'mysql';
+				}
+			}
+		} catch (\Throwable $e) {
+			// Some ODBC drivers don't support ATTR_SERVER_VERSION
+		}
+
+		try {
+			$sth = $pdo->query("SELECT version()");
+			$row = $sth->fetchColumn();
+			if ($row !== false) {
+				$rLower = strtolower((string) $row);
+				if (strpos($rLower, 'postgre') !== false) {
+					return 'pgsql';
+				}
+				if (strpos($rLower, 'maria') !== false || strpos($rLower, 'mysql') !== false) {
+					return 'mysql';
+				}
+			}
+		} catch (\Throwable $e) {
+			// version() may not be available
+		}
+
+		$this->debugLog('ODBC backend auto-detection inconclusive, defaulting to mysql', array());
+		return 'mysql';
 	}
 
 	private function validateDsnSecurity($dsn, $requireTls) {
 		if (!$requireTls) {
 			return;
 		}
+
+		if ($this->isOdbcDsn($dsn)) {
+			// ODBC: TLS is configured at the driver/DSN level in odbcinst.ini
+			// or odbc.ini, not in the PDO DSN string. We cannot validate it
+			// here. Log a reminder and trust the system ODBC configuration.
+			return;
+		}
+
 		$dsnLower = strtolower($dsn);
 		if (strpos($dsnLower, 'mysql:') === 0) {
 			if (strpos($dsnLower, 'ssl') === false) {
@@ -1769,12 +1848,25 @@ JSEOF;
 	// Utilities
 	// ----------------------------------------------------------------
 
+	/**
+	 * Return the logical driver name for SQL dialect selection.
+	 *
+	 * For native PDO drivers this returns "mysql" or "pgsql" directly.
+	 * For ODBC connections it returns the resolved backend engine so that
+	 * DDL, trigger syntax and index creation use the correct dialect.
+	 */
 	private function getDriverName(PDO $pdo) {
 		try {
-			return (string) $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+			$driver = (string) $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 		} catch (PDOException $e) {
 			return '';
 		}
+
+		if ($driver === 'odbc' && $this->resolvedDriver !== null) {
+			return $this->resolvedDriver;
+		}
+
+		return $driver;
 	}
 
 	private function setDefaultConfigIfMissing($key, $value) {

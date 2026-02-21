@@ -13,9 +13,10 @@
 
 - FreePBX 17.x / pbxACT with Framework ≥ 17.0.1
 - PHP 7.4+ (PHP 8.1+ recommended)
-- PDO extension with `pdo_mysql` and/or `pdo_pgsql` driver
+- PDO extension with `pdo_mysql` and/or `pdo_pgsql` driver, or `pdo_odbc` for ODBC connections
 - Remote audit database server (MariaDB 10.5+ or PostgreSQL 14+)
 - TLS certificates for database connections
+- (ODBC only) `unixODBC` and the appropriate ODBC driver for your database engine
 
 ---
 
@@ -94,11 +95,98 @@ fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
 fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
 ```
 
+### Option C: ODBC Connection
+
+ODBC allows the audit module to connect via system-level ODBC data sources, which is useful
+when:
+- Your organization mandates a centralized ODBC layer for all database access.
+- You need driver-level TLS/encryption configuration managed by the system administrator.
+- You are connecting to a database that requires a specific ODBC driver (e.g., MySQL
+  Connector/ODBC, MariaDB ODBC, psqlODBC).
+
+#### Step 1: Install unixODBC and the Database Driver
+
+```bash
+# Debian/Ubuntu -- MariaDB ODBC driver
+apt-get install unixodbc unixodbc-dev odbc-mariadb
+
+# Debian/Ubuntu -- PostgreSQL ODBC driver
+apt-get install unixodbc unixodbc-dev odbc-postgresql
+
+# RHEL/CentOS/SNG7 -- MariaDB ODBC driver
+yum install unixODBC mariadb-connector-odbc
+
+# RHEL/CentOS/SNG7 -- PostgreSQL ODBC driver
+yum install unixODBC postgresql-odbc
+```
+
+Verify the driver is registered:
+
+```bash
+odbcinst -q -d
+# Expected output includes [MariaDB Unicode] or [PostgreSQL Unicode]
+```
+
+#### Step 2: Configure the System DSN
+
+Edit `/etc/odbc.ini` to define the data source:
+
+```ini
+# /etc/odbc.ini -- MariaDB example
+[AuditDB]
+Driver      = MariaDB Unicode
+Server      = audit-db.example.com
+Port        = 3306
+Database    = auditcompliance
+Charset     = utf8mb4
+SSLVERIFY   = 1
+SSLCA       = /etc/ssl/certs/ca-certificates.crt
+```
+
+```ini
+# /etc/odbc.ini -- PostgreSQL example
+[AuditDB]
+Driver      = PostgreSQL Unicode
+Server      = audit-db.example.com
+Port        = 5432
+Database    = auditcompliance
+SSLMode     = require
+```
+
+Test connectivity:
+
+```bash
+isql -v AuditDB audit_writer '<PASSWORD>'
+# Should show "Connected!" and a SQL> prompt
+```
+
+#### Step 3: Configure the Module
+
+```bash
+fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:AuditDB"
+fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
+fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
+fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"   # or "pgsql"
+```
+
+The `AUDITCOMPLIANCE_DB_ODBC_BACKEND` setting is required so the module knows which SQL
+dialect to use for table creation, triggers, and indexes. If omitted, the module attempts
+auto-detection via `SELECT version()`, but explicit configuration is recommended.
+
+> **TLS with ODBC**: Encryption is configured at the ODBC driver level (`SSLVERIFY`,
+> `SSLCA`, `SSLMode` in `odbc.ini`), not in the PDO DSN string. The module's
+> `audit_db_require_tls` setting does not validate ODBC DSNs but should remain enabled
+> as a policy signal.
+
+---
+
 Alternatively, configure via the module's settings in the FreePBX config store:
 
 ```php
 // These are stored in FreePBX's astdb/kvstore:
-// audit_db_dsn, audit_db_user, audit_db_password, audit_db_require_tls
+// audit_db_dsn, audit_db_user, audit_db_password, audit_db_require_tls,
+// audit_db_odbc_backend
 ```
 
 > **Security**: Never store credentials in configuration files committed to version control. Use the FreePBX config store or environment variables.

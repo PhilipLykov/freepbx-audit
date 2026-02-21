@@ -24,12 +24,19 @@ Enterprise-grade immutable compliance audit logging for FreePBX 17 / pbxACT Web 
    fwconsole ma install auditcompliance
    fwconsole reload
    ```
-3. Configure a remote audit database:
+3. Configure a remote audit database (native PDO or ODBC):
    ```bash
+   # Native PDO (MariaDB)
    fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
    fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
    fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
    fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+
+   # Or via ODBC (system DSN defined in /etc/odbc.ini)
+   fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:AuditDB"
+   fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
+   fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
+   fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"
    ```
 4. Navigate to **Reports > Audit Compliance** in the Web GUI.
 5. The Dashboard shows real-time audit activity. Make any admin change and watch it appear.
@@ -67,7 +74,7 @@ When the same action fires through multiple channels (e.g., a POST that triggers
 - **Multi-channel event capture**: GUI + universal AJAX interceptor + BMO hooks + auth events
 - **Append-only immutable storage**: DB triggers prevent UPDATE/DELETE; least-privilege DB role
 - **Session-grouped timeline**: Events correlated by admin session with login/logout/timeout boundaries
-- **Remote database support**: MariaDB 10.5+ and PostgreSQL 14+ via TLS-enforced PDO
+- **Remote database support**: MariaDB 10.5+ and PostgreSQL 14+ via TLS-enforced PDO or ODBC
 - **Full search GUI**: Multi-dimensional filtering, sortable columns, pagination
 - **Export**: CSV and JSON with rate limiting (5000 row cap, 10s cooldown)
 - **Sensitive read auditing**: 21 pages covering CDR, recordings, credentials, PINs, logs, personal data
@@ -159,8 +166,9 @@ All timestamps: `DD-MM-YYYY HH:MM:SS` with `Europe/Chisinau` local timezone.
 
 - FreePBX 17.x / pbxACT with Framework >= 17.0.1
 - PHP 7.4+ (PHP 8.1+ recommended)
-- PDO with `pdo_mysql` and/or `pdo_pgsql`
+- PDO with `pdo_mysql` and/or `pdo_pgsql`, or `pdo_odbc` for ODBC connections
 - Remote MariaDB 10.5+ or PostgreSQL 14+ with TLS
+- (ODBC only) `unixODBC` and the appropriate database ODBC driver
 
 ## License
 
