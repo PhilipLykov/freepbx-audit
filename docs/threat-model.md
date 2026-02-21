@@ -3,7 +3,7 @@
 | Field    | Value                                    |
 |----------|------------------------------------------|
 | Module   | auditcompliance v17.0.0-alpha            |
-| Date     | 20-02-2026                               |
+| Date     | 21-02-2026                               |
 | Status   | Draft                                    |
 | Audience | Developers, Security Officers            |
 
@@ -99,10 +99,10 @@
 | OWASP | Control | Implementation |
 |-------|---------|----------------|
 | A01 Broken Access Control | Section-based RBAC | `checkSection('auditcompliance')` on page + AJAX |
-| A02 Cryptographic Failures | TLS-enforced DB connections | `validateDsnSecurity()` rejects non-TLS DSNs |
-| A03 Injection | Prepared statements everywhere | All `$pdo->prepare()` with bound parameters; allowlist for sort/filter columns |
+| A02 Cryptographic Failures | TLS-enforced DB connections | `validateDsnSecurity()` rejects non-TLS DSNs; `getConfigSafe()` defaults to TLS enabled even when config store returns `false` |
+| A03 Injection | Prepared statements everywhere | All `$pdo->prepare()` with bound parameters; allowlist for sort/filter columns; explicit `ESCAPE '\'` on all LIKE clauses for PostgreSQL compatibility |
 | A04 Insecure Design | Append-only architecture | DB triggers, least-privilege role, no update/delete API surface |
-| A05 Security Misconfiguration | Secure defaults | TLS required by default; fallback to local DB only if no remote DSN configured |
+| A05 Security Misconfiguration | Secure defaults | TLS required by default; fail-safe config retrieval via `getConfigSafe()`; fallback to local DB only if no remote DSN configured |
 | A06 Vulnerable Components | FreePBX framework dependency | Module requires `framework >= 17.0.1`; no external PHP dependencies |
 | A07 Auth Failures | Reliable actor attribution | Session-based username extraction; auth failure logging with IP tracking |
 | A08 Software/Data Integrity | Immutable event records | DB triggers prevent modification; module signing via FreePBX packaging |

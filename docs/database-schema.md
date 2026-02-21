@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Developers, DBAs, Operations     |
 
@@ -137,6 +137,8 @@ Stores one row per audit event. Fully immutable after insertion.
 | Integer type | INT | INTEGER |
 | Index creation | `safeExec()` with duplicate detection | `CREATE INDEX IF NOT EXISTS` |
 | Trigger syntax | `SIGNAL SQLSTATE '45000'` | `RAISE EXCEPTION` via PL/pgSQL function |
+| LIKE escape | `\` is the implicit default escape character | Requires explicit `ESCAPE '\'` clause (with `standard_conforming_strings = on`, the default since PostgreSQL 9.1) |
+| LIMIT/OFFSET binding | Inlined as sanitized integers (avoids emulated prepare quoting) | Inlined as sanitized integers (consistent approach) |
 
 ### ODBC Connections
 

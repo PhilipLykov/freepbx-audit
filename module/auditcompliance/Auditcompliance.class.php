@@ -712,9 +712,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$sql .= " WHERE actor = ?";
 			$params[] = $actor;
 		}
-		$sql .= " ORDER BY login_at_unix DESC LIMIT ? OFFSET ?";
-		$params[] = $limit;
-		$params[] = $offset;
+		$sql .= " ORDER BY login_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
 		$sth = $pdo->prepare($sql);
 		$sth->execute($params);
@@ -753,9 +751,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$sql .= " AND actor = ?";
 			$params[] = $actor;
 		}
-		$sql .= " ORDER BY occurred_at_unix DESC LIMIT ? OFFSET ?";
-		$params[] = $limit;
-		$params[] = $offset;
+		$sql .= " ORDER BY occurred_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
 		$sth = $pdo->prepare($sql);
 		$sth->execute($params);
@@ -814,7 +810,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 		if (!empty($filters['search_text'])) {
 			$term = '%' . str_replace(array('%', '_'), array('\\%', '\\_'), (string) $filters['search_text']) . '%';
-			$where[] = "(e.module_name LIKE ? OR e.action LIKE ? OR e.actor LIKE ? OR e.object_type LIKE ? OR e.object_id LIKE ?)";
+			$likeEscape = " ESCAPE '\\'";
+			$where[] = "(e.module_name LIKE ?" . $likeEscape . " OR e.action LIKE ?" . $likeEscape . " OR e.actor LIKE ?" . $likeEscape . " OR e.object_type LIKE ?" . $likeEscape . " OR e.object_id LIKE ?" . $likeEscape . ")";
 			$params[] = $term;
 			$params[] = $term;
 			$params[] = $term;
@@ -838,9 +835,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if (!empty($where)) {
 			$sql .= " WHERE " . implode(" AND ", $where);
 		}
-		$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT ? OFFSET ?";
-		$params[] = $limit;
-		$params[] = $offset;
+		$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
 		$sth = $pdo->prepare($sql);
 		$sth->execute($params);
@@ -850,7 +845,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if (!empty($where)) {
 			$countSql .= " WHERE " . implode(" AND ", $where);
 		}
-		$countParams = array_slice($params, 0, count($params) - 2);
+		$countParams = $params;
 		$csth = $pdo->prepare($countSql);
 		$csth->execute($countParams);
 		$total = (int) $csth->fetchColumn();
@@ -944,7 +939,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	}
 
 	private function getIdleTimeoutSeconds() {
-		$value = (int) ($this->getConfig('audit_session_idle_timeout_seconds') ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
+		$value = (int) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS);
 		return $value > 0 ? $value : self::SESSION_IDLE_TIMEOUT_SECONDS;
 	}
 
@@ -1201,8 +1196,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$sth->execute(array('failure', 'failure', $last24h));
 			$stats['auth_failures_24h'] = (int) $sth->fetchColumn();
 
-			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE channel = ? AND action LIKE ? AND occurred_at_unix >= ?");
-			$sth->execute(array('gui', '%_access', $last24h));
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE channel = ? AND action LIKE ? ESCAPE '\\' AND occurred_at_unix >= ?");
+			$sth->execute(array('gui', '%\\_access', $last24h));
 			$stats['sensitive_reads_24h'] = (int) $sth->fetchColumn();
 
 			$sth = $pdo->prepare("SELECT actor, COUNT(*) AS cnt FROM audit_events WHERE occurred_at_unix >= ? AND session_phase = ? GROUP BY actor ORDER BY cnt DESC LIMIT 5");
@@ -1688,10 +1683,10 @@ JSEOF;
 			return $this->auditDb;
 		}
 
-		$dsn = trim((string) ($this->getConfig('audit_db_dsn') ?? ''));
-		$user = (string) ($this->getConfig('audit_db_user') ?? '');
-		$password = (string) ($this->getConfig('audit_db_password') ?? '');
-		$requireTls = ((string) ($this->getConfig('audit_db_require_tls') ?? '1')) === '1';
+		$dsn = trim((string) ($this->getConfigSafe('audit_db_dsn', '')));
+		$user = (string) ($this->getConfigSafe('audit_db_user', ''));
+		$password = (string) ($this->getConfigSafe('audit_db_password', ''));
+		$requireTls = ($this->getConfigSafe('audit_db_require_tls', '1')) === '1';
 
 		if ($dsn === '') {
 			$this->auditDb = $this->db;
@@ -1733,7 +1728,7 @@ JSEOF;
 	 *   3. Fall back to "mysql" as the safer default (FreePBX ecosystem).
 	 */
 	private function resolveOdbcBackend(PDO $pdo) {
-		$explicit = strtolower(trim((string) ($this->getConfig('audit_db_odbc_backend') ?? '')));
+		$explicit = strtolower(trim($this->getConfigSafe('audit_db_odbc_backend', '')));
 		if ($explicit === 'mysql' || $explicit === 'mariadb') {
 			return 'mysql';
 		}
@@ -1869,9 +1864,17 @@ JSEOF;
 		return $driver;
 	}
 
+	private function getConfigSafe($key, $default = '') {
+		$val = $this->getConfig($key);
+		if ($val === null || $val === false) {
+			return $default;
+		}
+		return (string) $val;
+	}
+
 	private function setDefaultConfigIfMissing($key, $value) {
 		$current = $this->getConfig($key);
-		if ($current === null || $current === '') {
+		if ($current === null || $current === false || $current === '') {
 			$this->setConfig($key, $value);
 		}
 	}

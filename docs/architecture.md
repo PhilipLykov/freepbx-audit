@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Developers, Architects           |
 
@@ -58,6 +58,7 @@ graph LR
         HookHandlers["38 Hook Handlers"]
         AjaxHandlers["7 AJAX Handlers"]
         SchemaManager["ensureAuditSchema()"]
+        ConfigSafe["getConfigSafe()"]
         Discovery["discoverModuleSurfaces()"]
     end
 
@@ -222,3 +223,6 @@ graph TD
 | **Deduplication window (3 seconds)** | Prevents duplicate events from multi-channel capture (e.g., GUI POST triggers both `doConfigPageInit` and a BMO hook) without losing genuinely repeated actions |
 | **PHP `time()` for timestamps** | Server clock authority; UTC + local (Europe/Chisinau) stored for every event |
 | **ODBC support via pdo_odbc** | Enterprises that mandate centralized ODBC data sources or need driver-level TLS management can connect without native PDO drivers; backend engine auto-detected or explicitly configured |
+| **Inline LIMIT/OFFSET** | Pagination values are sanitized via `max()/min()` casts and inlined into SQL strings instead of using PDO bound parameters, preventing `SQLSTATE[42000]` syntax errors on MySQL with `ATTR_EMULATE_PREPARES = true` (default PHP < 8.1) |
+| **Explicit LIKE ESCAPE clause** | All `LIKE` queries specify `ESCAPE '\'` for correct wildcard escaping on PostgreSQL where `standard_conforming_strings = on` (default since 9.1) removes the implicit backslash escape |
+| **Resilient config retrieval** | `getConfigSafe()` wraps FreePBX `getConfig()` to handle `null`, `false`, and empty string returns consistently, preventing silent TLS disablement when config store returns `false` for unset keys |

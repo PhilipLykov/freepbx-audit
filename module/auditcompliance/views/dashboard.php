@@ -260,6 +260,15 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 </style>
 
 <div class="container-fluid">
+	<h1><?php echo _('Audit Compliance'); ?></h1>
+
+	<ul class="nav nav-tabs audit-dash-tabs">
+		<li class="active"><a href="?display=auditcompliance&view=dashboard"><i class="fa fa-tachometer"></i> <?php echo _('Dashboard'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=discovery"><i class="fa fa-puzzle-piece"></i> <?php echo _('Module Discovery'); ?></a></li>
+	</ul>
+
 	<div class="audit-dash-hero">
 		<h1><i class="fa fa-shield" style="margin-right: 8px;"></i><?php echo _('Audit Compliance'); ?></h1>
 		<span class="subtitle"><?php echo _('Administrator activity monitoring and compliance log'); ?></span>

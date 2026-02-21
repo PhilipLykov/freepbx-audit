@@ -8,7 +8,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 
 Enterprise-grade immutable compliance audit logging for FreePBX 17 / pbxACT Web GUI administrator actions. Provides **universal coverage** across all modules without modifying any native FreePBX/pbxACT core files.
@@ -81,7 +81,7 @@ When the same action fires through multiple channels (e.g., a POST that triggers
 - **Module Discovery**: Built-in tool to enumerate all installed modules and their audit surfaces
 - **RBAC**: Section-based permission check on page and all AJAX endpoints
 - **Sensitive data redaction**: Passwords, tokens, API keys automatically masked
-- **OWASP Top 10 aligned**: Prepared statements, output escaping, TLS enforcement, allowlisted inputs
+- **OWASP Top 10 aligned**: Prepared statements, output escaping, TLS enforcement (fail-safe defaults), allowlisted inputs, explicit LIKE ESCAPE clauses
 
 ## Installation
 

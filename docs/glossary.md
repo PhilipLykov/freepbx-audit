@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | All                              |
 
@@ -24,6 +24,7 @@
 | **doConfigPageInit** | A FreePBX BMO method called on every page load for registered module displays. The audit module uses it as the primary GUI capture hook and session boundary detector. |
 | **Event** | A single audit record in the `audit_events` table representing one administrator action, sensitive read, or authentication boundary. |
 | **Hook** | A FreePBX inter-module integration point declared in `module.xml`. When module A calls a hookable method, module B's registered handler is invoked. The audit module hooks into 38 methods across 10 modules. |
+| **getConfigSafe** | Internal helper method wrapping FreePBX's `getConfig()` to handle `null`, `false`, and empty string returns uniformly. Ensures security-critical defaults (e.g., TLS enabled) are applied when the config store returns unexpected values. |
 | **Idle Timeout** | The maximum number of seconds of inactivity before a session is considered timed out. Default: 1800 seconds (30 minutes). Configurable via `audit_session_idle_timeout_seconds`. |
 | **Immutability Trigger** | A database `BEFORE UPDATE` or `BEFORE DELETE` trigger that raises an error to prevent modification of audit records. Three triggers protect `audit_events` (update + delete) and `audit_sessions` (delete). |
 | **myConfigPageInits** | A FreePBX BMO method that returns a list of module display names the module wants to receive `doConfigPageInit` calls for. The audit module registers for all active module pages dynamically. |

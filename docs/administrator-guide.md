@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Administrators                   |
 
@@ -15,12 +15,14 @@ Navigate to **Reports > Audit Compliance** in the FreePBX Web GUI. The module re
 `auditcompliance` section permission -- admins without this permission will see an "Access
 denied" message.
 
-The module has four views, accessible via tabs:
+The module has four views, accessible via a persistent tab bar present on all views:
 
 1. **Dashboard** -- At-a-glance overview (default landing page)
 2. **Search** -- Multi-dimensional event search and export
 3. **Session Timeline** -- Chronological session-grouped view
 4. **Module Discovery** -- Installed module audit coverage report
+
+The active tab is highlighted on every view. Navigation between views is always one click away.
 
 ---
 

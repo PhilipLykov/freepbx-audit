@@ -3,7 +3,7 @@
 | Field    | Value                                    |
 |----------|------------------------------------------|
 | Module   | auditcompliance v17.0.0-alpha            |
-| Date     | 20-02-2026                               |
+| Date     | 21-02-2026                               |
 | Status   | Draft                                    |
 | Audience | Developers, QA, Security Officers        |
 
@@ -213,6 +213,16 @@ Scalar values truncated to 2048 characters.
 | T2-09 | Calendar sync | Trigger calendar sync | Event with `channel=hook`, `module_name=calendar`, `action=sync` |
 | T2-10 | Bulk import | Run bulk handler import | Event with `channel=hook`, `module_name=bulkhandler`, `action=import` |
 
+### Cross-Database Compatibility Tests
+
+| # | Test Case | Method | Expected Result |
+|---|-----------|--------|-----------------|
+| DB-01 | LIMIT/OFFSET on MySQL emulated prepares | Search events with PHP < 8.1 and `ATTR_EMULATE_PREPARES = true` | Pagination works without `SQLSTATE[42000]` errors |
+| DB-02 | LIKE ESCAPE on PostgreSQL | Search for text containing `%` or `_` characters on PostgreSQL | Results correctly filter; wildcards treated as literals |
+| DB-03 | Sensitive reads count accuracy | Dashboard `sensitive_reads_24h` on PostgreSQL and MySQL | Count matches actual events with `action` ending in literal `_access` |
+| DB-04 | Config store returns `false` | Temporarily remove `audit_db_require_tls` config key | TLS defaults to enabled; connection to remote DB enforces TLS |
+| DB-05 | Config store returns `false` for ODBC backend | Temporarily remove `audit_db_odbc_backend` key when using ODBC | Auto-detection runs; falls back to `mysql` gracefully |
+
 ## Execution Notes
 
 - Tests executed on staging FreePBX 17 / pbxACT instance.
@@ -220,3 +230,4 @@ Scalar values truncated to 2048 characters.
 - RBAC tests require admin accounts with varying permissions.
 - All timestamps in `DD-MM-YYYY HH:MM:SS` format, timezone `Europe/Chisinau`.
 - AJAX interceptor tests require browser with JS enabled (standard admin workflow).
+- Cross-database tests require both MySQL/MariaDB and PostgreSQL staging environments.

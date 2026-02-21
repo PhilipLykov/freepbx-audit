@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Administrators, Developers       |
 
@@ -13,6 +13,11 @@
 
 These settings are stored in the FreePBX key-value store (`astdb`) and can be set via
 `fwconsole setting` or the FreePBX Advanced Settings GUI.
+
+> **Implementation note**: All config reads use the internal `getConfigSafe($key, $default)`
+> helper, which treats `null`, `false`, and empty string returns from `getConfig()` uniformly.
+> This prevents silent security downgrades (e.g., TLS disablement) when the config store
+> returns `false` for non-existent or corrupted keys.
 
 ### `audit_db_dsn`
 
@@ -83,6 +88,10 @@ fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:Driver=MariaDB Unicode;Server=aud
 **Description**: When enabled (`'1'`), the module validates that the DSN includes TLS
 parameters before establishing the connection. If the DSN lacks TLS configuration, an
 exception is thrown and the connection is refused.
+
+**Default safety**: If this key is missing or the config store returns `false`, the module
+defaults to TLS enabled (`'1'`) via `getConfigSafe()`. This prevents accidental plaintext
+connections on first-run or config corruption scenarios.
 
 **Recommendation**: Always leave enabled in production. Disable only for local development
 with a non-networked database.

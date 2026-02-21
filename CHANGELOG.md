@@ -12,6 +12,20 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - **ODBC database connection support** via `pdo_odbc`. The module can now connect to the audit database through Linux system ODBC data sources (`unixODBC`), enabling centralized driver-level TLS management and compliance with enterprise ODBC-only policies.
 - New config key `audit_db_odbc_backend` (`mysql` / `pgsql`) to explicitly specify the database engine behind an ODBC connection when auto-detection is insufficient.
 - Automatic ODBC backend detection via `SELECT version()` and `PDO::ATTR_SERVER_VERSION` heuristics, with fallback to `mysql`.
+- **Dashboard tab navigation** -- the Dashboard view now includes the standard 4-tab navigation bar consistent with Search, Timeline, and Discovery views.
+- `getConfigSafe()` internal helper for resilient config key retrieval with explicit default values.
+
+### Fixed
+
+- **LIMIT/OFFSET MySQL compatibility** -- pagination parameters (`LIMIT`, `OFFSET`) are now inlined as sanitized integers instead of bound PDO parameters. Prevents `SQLSTATE[42000]` syntax errors on MySQL/MariaDB with `PDO::ATTR_EMULATE_PREPARES = true` (the default on PHP < 8.1).
+- **PostgreSQL LIKE escape compatibility** -- all `LIKE` clauses in `searchAuditEvents()` and `handleDashboardStatsAjax()` now include an explicit `ESCAPE '\'` clause, required by PostgreSQL when `standard_conforming_strings = on` (default since PostgreSQL 9.1).
+- **Dashboard sensitive reads count** -- the `%_access` pattern in the `sensitive_reads_24h` dashboard query now escapes the `_` wildcard (`%\_access`) to prevent false matches where `_` was treated as a single-character SQL wildcard.
+- **TLS default when config returns `false`** -- `getConfig()` can return `false` (not `null`) for non-existent keys. The null coalesce operator `??` does not catch `false`, which silently disabled TLS enforcement. All config reads now use the new `getConfigSafe()` helper that handles `null`, `false`, and empty string correctly, defaulting `audit_db_require_tls` to `'1'` (enabled).
+- **`setDefaultConfigIfMissing()` false handling** -- the install-time config bootstrapper now checks for `false` in addition to `null` and empty string when deciding whether to set a default value.
+
+### Security
+
+- TLS enforcement can no longer be silently disabled by a `false` return from the FreePBX config store, closing a potential downgrade vector on first-run or config corruption scenarios.
 
 ## [0.1.0-alpha] - 20-02-2026
 
@@ -37,7 +51,7 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ### Security
 
-- All database queries use prepared statements with bound parameters.
+- All database queries use prepared statements (LIMIT/OFFSET inlined as sanitized integers for MySQL emulated prepare compatibility).
 - Sort and filter column names validated against strict allowlists.
 - All view output escaped via `htmlspecialchars()` and JavaScript `createTextNode()` / `esc()`.
 - TLS enforcement on remote audit database connections via DSN validation.
@@ -57,5 +71,5 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Upstream FreePBX analysis of 80 repositories.
 - Security test plan with OWASP test cases, AJAX interceptor validation, and coverage gate checks.
 
-[Unreleased]: https://github.com/example/freepbx-audit/compare/v0.1.0-alpha...HEAD
-[0.1.0-alpha]: https://github.com/example/freepbx-audit/releases/tag/v0.1.0-alpha
+[Unreleased]: https://github.com/PhilipLykov/freepbx-audit/compare/v0.1.0-alpha...HEAD
+[0.1.0-alpha]: https://github.com/PhilipLykov/freepbx-audit/releases/tag/v0.1.0-alpha

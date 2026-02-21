@@ -3,7 +3,7 @@
 | Field    | Value                                    |
 |----------|------------------------------------------|
 | Module   | auditcompliance v17.0.0-alpha            |
-| Date     | 20-02-2026                               |
+| Date     | 21-02-2026                               |
 | Status   | Draft                                    |
 | Audience | Developers, Compliance Officers          |
 
@@ -58,7 +58,7 @@ Trigger:    Applied to all change payloads (before/after/changed) and hook argum
 Method:     Three-tier matching: substring → exact → suffix (case-insensitive)
 Result:     Value replaced with string "***REDACTED***"
 Recursion:  Applied recursively to nested arrays
-Non-scalar: Objects and resources are replaced with "[non-scalar]" for safety
+Non-scalar: Objects and resources are silently excluded from the output (request data is always string/array)
 ```
 
 ## Data Truncation

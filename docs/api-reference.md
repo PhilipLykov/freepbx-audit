@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Developers                       |
 
@@ -147,7 +147,7 @@ Searches audit events with multi-dimensional filters, sorting, and pagination.
 
 | Parameter | Type | Required | Validation | Description |
 |-----------|------|----------|------------|-------------|
-| `search_text` | string | No | Max 2048 chars; `%` and `_` escaped for LIKE | Free-text search across module, action, actor, object_type, object_id |
+| `search_text` | string | No | Max 2048 chars; `%` and `_` escaped for LIKE with explicit `ESCAPE '\'` | Free-text search across module, action, actor, object_type, object_id |
 | `actor` | string | No | Exact match | Filter by actor username |
 | `module_name` | string | No | Exact match | Filter by module name |
 | `action_filter` | string | No | Exact match | Filter by action |
@@ -159,8 +159,8 @@ Searches audit events with multi-dimensional filters, sorting, and pagination.
 | `date_to` | string | No | Format: `YYYY-MM-DD`; parsed in Europe/Chisinau timezone at 23:59:59 | End date (inclusive) |
 | `sort` | string | No | Allowlist: `occurred_at_unix`, `actor`, `module_name`, `action`, `channel` | Sort field (default: `occurred_at_unix`) |
 | `sort_dir` | string | No | `ASC` or `DESC` (default: `DESC`) | Sort direction |
-| `limit` | integer | No | Range: 1-200 (default: 50) | Page size |
-| `offset` | integer | No | Min: 0 (default: 0) | Pagination offset |
+| `limit` | integer | No | Range: 1-200 (default: 50); sanitized and inlined into SQL | Page size |
+| `offset` | integer | No | Min: 0 (default: 0); sanitized and inlined into SQL | Pagination offset |
 
 ### Response
 

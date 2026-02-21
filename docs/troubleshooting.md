@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 | Audience | Administrators, Operations       |
 
@@ -127,6 +127,21 @@ psql -U postgres auditcompliance -c "
 
 ---
 
+## Recently Resolved Issues
+
+These issues were identified during code review (21-02-2026) and fixed in the Unreleased version:
+
+| Issue | Impact | Resolution |
+|-------|--------|------------|
+| LIMIT/OFFSET as PDO bound params | `SQLSTATE[42000]` syntax error on MySQL with `ATTR_EMULATE_PREPARES = true` (PHP < 8.1) | Pagination values inlined as sanitized integers |
+| Missing LIKE ESCAPE clause | Free-text search `\%` / `\_` escapes ignored by PostgreSQL (`standard_conforming_strings = on`) | Explicit `ESCAPE '\'` added to all LIKE clauses |
+| Dashboard `_access` wildcard | `_` in `%_access` treated as SQL single-char wildcard, potentially over-counting sensitive reads | Escaped to `%\_access` with `ESCAPE '\'` |
+| TLS silently disabled | `getConfig()` returning `false` bypassed null coalesce, yielding `requireTls = false` | New `getConfigSafe()` helper defaults to TLS enabled |
+| Dashboard missing tab nav | Dashboard was the only view without the 4-tab navigation bar | Tab bar added, consistent with all other views |
+| `setDefaultConfigIfMissing` | `false` return from `getConfig()` not checked, preventing install-time defaults | Added `false` check to conditional |
+
+---
+
 ## Known Limitations
 
 | Limitation | Description | Mitigation |
@@ -137,6 +152,7 @@ psql -U postgres auditcompliance -c "
 | Stale session close uses login time | `closeStaleActiveSessions()` compares against `login_at_unix`, not last activity (which is only in PHP session, not DB) | Sessions are correctly closed; the only impact is timeout vs. logout classification |
 | GUI-only modules (no AJAX) have limited capture | 8 modules with form-only UI have no AJAX interceptor coverage | All GUI POST submissions are captured; these modules simply have no AJAX surface |
 | Maximum 5,000 rows per export | Enforced to prevent browser/server overload | Use direct SQL queries for larger exports |
+| CLI discovery tool `gui_pages` approximation | Counts `<menuitems>` XML tags (typically 1 per module) rather than individual menu item children | In-module `discoverModuleSurfaces()` uses the correct `count($modData['items'])` |
 
 ---
 

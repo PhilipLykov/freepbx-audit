@@ -3,7 +3,7 @@
 | Field    | Value                            |
 |----------|----------------------------------|
 | Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 20-02-2026                       |
+| Date     | 21-02-2026                       |
 | Status   | Draft                            |
 
 ---
@@ -77,3 +77,12 @@
 | Document | Description |
 |----------|-------------|
 | [Upstream Analysis](upstream-analysis.md) | FreePBX repository scan findings (80 repos, communication surfaces, atypical modules) |
+
+---
+
+## Revision History
+
+| Date | Changes |
+|------|---------|
+| 20-02-2026 | Initial documentation suite (v0.1.0-alpha) |
+| 21-02-2026 | Code review fixes documented: LIMIT/OFFSET MySQL fix, PostgreSQL LIKE ESCAPE, Dashboard tab nav, TLS default safety, sensitive reads wildcard fix. All document dates updated. New cross-database test cases added to security test plan. |
