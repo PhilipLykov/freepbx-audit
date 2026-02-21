@@ -1,0 +1,1879 @@
+<?php
+// vim: set ai ts=4 sw=4 ft=php:
+namespace FreePBX\modules;
+
+use BMO;
+use FreePBX_Helpers;
+use PDO;
+use PDOException;
+
+class Auditcompliance extends FreePBX_Helpers implements BMO {
+	private const SESSION_KEY_ID = 'auditcompliance_session_uuid';
+	private const SESSION_KEY_LAST_ACTIVITY = 'auditcompliance_last_activity_unix';
+	private const SESSION_KEY_LOGIN_RECORDED = 'auditcompliance_login_recorded';
+	private const SESSION_IDLE_TIMEOUT_SECONDS = 1800;
+	private const DEDUP_WINDOW_SECONDS = 3;
+
+	private const SENSITIVE_READ_PAGES = array(
+		'cdr' => 'cdr_access',
+		'recordings' => 'recording_access',
+		'userman' => 'user_credentials_access',
+		'certman' => 'certificate_access',
+		'voicemail' => 'voicemail_access',
+		'conferences' => 'conference_pin_access',
+		'contactmanager' => 'contact_data_access',
+		'queues' => 'queue_credentials_access',
+		'manager' => 'ami_credentials_access',
+		'sipsettings' => 'sip_credentials_access',
+		'logfiles' => 'system_log_access',
+		'arimanager' => 'ari_credentials_access',
+		'filestore' => 'storage_credentials_access',
+		'calendar' => 'calendar_credentials_access',
+		'fax' => 'fax_settings_access',
+		'pinsets' => 'pin_credentials_access',
+		'superfecta' => 'callerid_config_access',
+		'xmpp' => 'xmpp_credentials_access',
+		'phonebook' => 'phonebook_personal_access',
+		'blacklist' => 'blacklist_personal_access',
+		'cel' => 'cel_data_access'
+	);
+
+	private $FreePBX;
+	private $db;
+	private $auditDb = null;
+	private $schemaReady = false;
+	private $auditScriptsInjected = false;
+
+	public function __construct($freepbx = null) {
+		if ($freepbx === null) {
+			throw new \Exception('Not given a FreePBX Object');
+		}
+		$this->FreePBX = $freepbx;
+		$this->db = $freepbx->Database;
+	}
+
+	public function install() {
+		$this->setDefaultConfigIfMissing('audit_db_dsn', '');
+		$this->setDefaultConfigIfMissing('audit_db_user', '');
+		$this->setDefaultConfigIfMissing('audit_db_password', '');
+		$this->setDefaultConfigIfMissing('audit_db_require_tls', '1');
+		$this->setDefaultConfigIfMissing('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS);
+
+		try {
+			$this->ensureAuditSchema();
+		} catch (\Throwable $e) {
+			$this->debugLog('Schema bootstrap deferred (install)', array('error' => $e->getMessage()));
+		}
+		return true;
+	}
+
+	public function uninstall() {}
+
+	/**
+	 * Register for ALL active module pages so session boundary tracking
+	 * and logout interception cover the entire admin GUI.
+	 */
+	public function myConfigPageInits() {
+		$pages = array();
+		try {
+			$modules = $this->FreePBX->Modules->getActiveModules(false);
+			if (is_array($modules)) {
+				foreach ($modules as $modName => $modData) {
+					if (isset($modData['items']) && is_array($modData['items'])) {
+						foreach (array_keys($modData['items']) as $itemKey) {
+							$pages[] = (string) $itemKey;
+						}
+					}
+				}
+			}
+		} catch (\Throwable $e) {
+			// Fallback handled below
+		}
+		$critical = array('core', 'userman', 'backup', 'certman', 'cdr', 'recordings', 'auditcompliance');
+		return array_values(array_unique(array_merge($pages, $critical)));
+	}
+
+	/**
+	 * Main hook: runs on every page load for registered displays.
+	 *
+	 * 1. Manages auth session boundary events (login/timeout detection).
+	 * 2. Injects audit scripts (logout interception + universal AJAX interceptor).
+	 * 3. Records state-changing events for POST requests.
+	 * 4. Records sensitive-read events for GET requests on designated pages.
+	 */
+	public function doConfigPageInit($display) {
+		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+			return;
+		}
+
+		try {
+			$sessionId = $this->ensureSessionState();
+		} catch (\Throwable $e) {
+			$this->debugLog('Session boundary check failed', array(
+				'error' => $e->getMessage(),
+				'display' => (string) $display
+			));
+			return;
+		}
+
+		$this->injectAuditScripts();
+
+		if (empty($display)) {
+			return;
+		}
+
+		$method = strtolower((string) ($_SERVER['REQUEST_METHOD'] ?? ''));
+		$displayLower = strtolower((string) $display);
+
+		if ($method === 'post') {
+			$this->captureGuiPostEvent($sessionId, $display);
+		} elseif ($method === 'get' && isset(self::SENSITIVE_READ_PAGES[$displayLower])) {
+			$this->captureSensitiveReadEvent($sessionId, $display, $displayLower);
+		}
+	}
+
+	private function captureGuiPostEvent($sessionId, $display) {
+		try {
+			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
+			$objectId = $this->detectObjectId();
+			$this->routeEvent(array(
+				'session_id' => $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'gui',
+				'module_name' => (string) $display,
+				'action' => $action,
+				'outcome' => 'success',
+				'route' => (string) $display,
+				'object_type' => $this->detectObjectType($display),
+				'object_id' => $objectId,
+				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
+				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+				'request_hash' => $this->hashRequest($_REQUEST),
+				'change' => $this->buildChangePayload($_REQUEST)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('GUI audit write failed', array(
+				'error' => $e->getMessage(),
+				'display' => (string) $display
+			));
+		}
+	}
+
+	private function captureSensitiveReadEvent($sessionId, $display, $displayLower) {
+		try {
+			$readType = self::SENSITIVE_READ_PAGES[$displayLower];
+			$this->routeEvent(array(
+				'session_id' => $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'gui',
+				'module_name' => (string) $display,
+				'action' => $readType,
+				'outcome' => 'success',
+				'route' => (string) $display,
+				'object_type' => $this->detectObjectType($display),
+				'object_id' => $this->detectObjectId(),
+				'request_method' => 'GET',
+				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+				'request_hash' => '',
+				'change' => array(
+					'before' => null, 'after' => null,
+					'added' => array(), 'removed' => array(),
+					'changed' => array('view' => $readType)
+				)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('Sensitive read audit failed', array(
+				'error' => $e->getMessage(),
+				'display' => (string) $display
+			));
+		}
+	}
+
+	public function getRightNav($request) {
+		return '';
+	}
+
+	/**
+	 * Discovery tool: scans installed modules on the current FreePBX/pbxACT
+	 * instance and maps their communication surfaces (GUI, AJAX, API, hooks)
+	 * to audit coverage status. Designed for deployment-time validation.
+	 */
+	public function discoverModuleSurfaces() {
+		$result = array('modules' => array(), 'summary' => array(
+			'total' => 0, 'has_ajax' => 0, 'has_api' => 0,
+			'has_hooks' => 0, 'commercial' => 0,
+			'timestamp' => $this->getChisinauTimestamp()
+		));
+
+		try {
+			$allModules = $this->FreePBX->Modules->getActiveModules(false);
+		} catch (\Throwable $e) {
+			return $result;
+		}
+
+		if (!is_array($allModules)) {
+			return $result;
+		}
+
+		$hookedModules = $this->getHookedModuleList();
+		$modulesDir = $this->FreePBX->Config->get('AMPWEBROOT') . '/admin/modules';
+
+		foreach ($allModules as $rawName => $modData) {
+			$rawName = (string) $rawName;
+			$modPath = $modulesDir . '/' . $rawName;
+			$className = ucfirst($rawName);
+
+			$hasAjax = false;
+			$hasApi = false;
+			$hasProcessHooks = false;
+			$isCommercial = false;
+			$guiPages = 0;
+
+			if (isset($modData['items']) && is_array($modData['items'])) {
+				$guiPages = count($modData['items']);
+			}
+
+			$classFile = $modPath . '/' . $className . '.class.php';
+			if (is_file($classFile)) {
+				$content = @file_get_contents($classFile);
+				if ($content !== false) {
+					$hasAjax = (strpos($content, 'function ajaxHandler') !== false);
+					$hasProcessHooks = (strpos($content, 'processHooks') !== false);
+				}
+			}
+
+			$hasApi = is_dir($modPath . '/Api/Rest') || is_dir($modPath . '/Api/Gql');
+
+			$moduleXml = $modPath . '/module.xml';
+			if (is_file($moduleXml)) {
+				$xmlContent = @file_get_contents($moduleXml);
+				if ($xmlContent !== false) {
+					$isCommercial = (strpos($xmlContent, '<license>Commercial') !== false)
+						|| (strpos($xmlContent, '<commercial>') !== false)
+						|| (strpos($xmlContent, 'Sangoma') !== false && strpos($xmlContent, 'commercial') !== false);
+				}
+			}
+
+			$hasAuditHook = in_array($rawName, $hookedModules, true);
+
+			$hasSensitiveRead = array_key_exists(strtolower($rawName), self::SENSITIVE_READ_PAGES);
+
+			if ($hasAuditHook) {
+				$coverage = 'full';
+			} elseif ($hasSensitiveRead && $hasAjax) {
+				$coverage = 'gui_ajax_read';
+			} elseif ($hasSensitiveRead) {
+				$coverage = 'gui_read';
+			} elseif ($hasAjax) {
+				$coverage = 'gui_ajax';
+			} else {
+				$coverage = 'gui_only';
+			}
+
+			$result['modules'][] = array(
+				'name' => $rawName,
+				'version' => (string) ($modData['version'] ?? ''),
+				'commercial' => $isCommercial,
+				'gui_pages' => $guiPages,
+				'has_ajax' => $hasAjax,
+				'has_api' => $hasApi,
+				'has_process_hooks' => $hasProcessHooks,
+				'has_audit_hook' => $hasAuditHook,
+				'has_sensitive_read' => $hasSensitiveRead,
+				'coverage' => $coverage
+			);
+
+			$result['summary']['total']++;
+			if ($hasAjax) { $result['summary']['has_ajax']++; }
+			if ($hasApi) { $result['summary']['has_api']++; }
+			if ($hasProcessHooks) { $result['summary']['has_hooks']++; }
+			if ($isCommercial) { $result['summary']['commercial']++; }
+		}
+
+		usort($result['modules'], function ($a, $b) {
+			return strcmp($a['name'], $b['name']);
+		});
+
+		return $result;
+	}
+
+	private function getHookedModuleList() {
+		return array(
+			'core', 'userman', 'backup', 'certman', 'voicemail',
+			'timeconditions', 'contactmanager', 'ucp', 'calendar', 'bulkhandler'
+		);
+	}
+
+	// ----------------------------------------------------------------
+	// Unified capture router — all channels flow through here
+	// ----------------------------------------------------------------
+
+	/**
+	 * Central event routing method. Validates, normalizes, deduplicates,
+	 * and persists events from any capture channel.
+	 *
+	 * Required keys: session_id, session_phase, channel, module_name,
+	 * action, outcome, route, object_type, object_id, request_method,
+	 * request_uri, change.
+	 *
+	 * Optional: request_hash (defaults to empty).
+	 */
+	private function routeEvent(array $data) {
+		$sessionId = (string) ($data['session_id'] ?? '');
+		$channel = (string) ($data['channel'] ?? 'unknown');
+		$moduleName = $this->truncate((string) ($data['module_name'] ?? ''), 128);
+		$action = $this->truncate((string) ($data['action'] ?? ''), 128);
+		$objectId = $this->truncate((string) ($data['object_id'] ?? ''), 256);
+
+		if ($sessionId === '' || $moduleName === '' || $action === '') {
+			return;
+		}
+
+		if ($this->isRecentDuplicate($sessionId, $moduleName, $action, $objectId)) {
+			return;
+		}
+
+		$event = array(
+			'event_id' => $this->newEventId(),
+			'session_id' => $sessionId,
+			'session_phase' => $this->truncate((string) ($data['session_phase'] ?? 'activity'), 16),
+			'channel' => $this->truncate($channel, 16),
+			'module_name' => $moduleName,
+			'action' => $action,
+			'outcome' => $this->truncate((string) ($data['outcome'] ?? 'success'), 32),
+			'route' => $this->truncate((string) ($data['route'] ?? ''), 1024),
+			'object_type' => $this->truncate((string) ($data['object_type'] ?? ''), 128),
+			'object_id' => $objectId,
+			'actor' => $this->getActor(),
+			'source_ip' => $this->getRemoteIp(),
+			'request_method' => $this->truncate((string) ($data['request_method'] ?? ''), 16),
+			'request_uri' => $this->truncate((string) ($data['request_uri'] ?? ''), 2048),
+			'request_hash' => $this->truncate((string) ($data['request_hash'] ?? ''), 128),
+			'change' => isset($data['change']) ? $data['change'] : array(
+				'before' => null, 'after' => null,
+				'added' => array(), 'removed' => array(), 'changed' => array()
+			),
+			'occurred_at_unix' => time(),
+			'occurred_at_utc' => gmdate('d-m-Y H:i:s'),
+			'occurred_at_local' => $this->getChisinauTimestamp()
+		);
+
+		$this->appendAuditEvent($event);
+		$this->incrementSessionEventCount($sessionId);
+		$this->markSessionActivity();
+	}
+
+	/**
+	 * Cross-channel deduplication. Prevents the same logical action from being
+	 * recorded twice when captured by multiple channels (e.g. GUI + hook, or
+	 * GUI + AJAX interceptor) within a short time window.
+	 */
+	private function isRecentDuplicate($sessionId, $moduleName, $action, $objectId) {
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$cutoff = time() - self::DEDUP_WINDOW_SECONDS;
+			$sql = "SELECT COUNT(*) FROM audit_events WHERE session_id = ? AND module_name = ? AND action = ? AND object_id = ? AND occurred_at_unix >= ?";
+			$sth = $pdo->prepare($sql);
+			$sth->execute(array($sessionId, $moduleName, $action, $objectId, $cutoff));
+			return ((int) $sth->fetchColumn()) > 0;
+		} catch (\Throwable $e) {
+			return false;
+		}
+	}
+
+	// ----------------------------------------------------------------
+	// BMO hook handlers for cross-module write interception
+	// ----------------------------------------------------------------
+
+	/**
+	 * Generic hook handler for cross-module write interception.
+	 * Routes through the unified capture router with deduplication.
+	 */
+	public function captureHookEvent($callerModule, $callerMethod) {
+		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+			return;
+		}
+		try {
+			$sessionId = $_SESSION[self::SESSION_KEY_ID] ?? null;
+			if (empty($sessionId)) {
+				return;
+			}
+			$args = func_get_args();
+			$hookArgs = array_slice($args, 2);
+			$this->routeEvent(array(
+				'session_id' => (string) $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'hook',
+				'module_name' => (string) $callerModule,
+				'action' => (string) $callerMethod,
+				'outcome' => 'success',
+				'route' => $callerModule . '::' . $callerMethod,
+				'object_type' => strtolower((string) $callerModule),
+				'object_id' => $this->extractObjectIdFromArgs($hookArgs),
+				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'HOOK',
+				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+				'change' => array(
+					'before' => null, 'after' => null,
+					'added' => array(), 'removed' => array(),
+					'changed' => $this->flattenHookArgs($hookArgs)
+				)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('Hook audit failed', array(
+				'error' => $e->getMessage(),
+				'module' => (string) $callerModule,
+				'method' => (string) $callerMethod
+			));
+		}
+	}
+
+	public function hookCore_processQuickCreate() {
+		$this->captureHookEvent('core', 'processQuickCreate', ...func_get_args());
+	}
+
+	public function hookCore_addDevice() {
+		$this->captureHookEvent('core', 'addDevice', ...func_get_args());
+	}
+
+	public function hookCore_delDevice() {
+		$this->captureHookEvent('core', 'delDevice', ...func_get_args());
+	}
+
+	public function hookCore_addUser() {
+		$this->captureHookEvent('core', 'addUser', ...func_get_args());
+	}
+
+	public function hookCore_delUser() {
+		$this->captureHookEvent('core', 'delUser', ...func_get_args());
+	}
+
+	public function hookCore_addDID() {
+		$this->captureHookEvent('core', 'addDID', ...func_get_args());
+	}
+
+	public function hookCore_delDID() {
+		$this->captureHookEvent('core', 'delDID', ...func_get_args());
+	}
+
+	public function hookUserman_addUserByDirectory() {
+		$this->captureHookEvent('userman', 'addUserByDirectory', ...func_get_args());
+	}
+
+	public function hookUserman_updateUser() {
+		$this->captureHookEvent('userman', 'updateUser', ...func_get_args());
+	}
+
+	public function hookUserman_deleteUserByID() {
+		$this->captureHookEvent('userman', 'deleteUserByID', ...func_get_args());
+	}
+
+	public function hookUserman_updateGroup() {
+		$this->captureHookEvent('userman', 'updateGroup', ...func_get_args());
+	}
+
+	public function hookUserman_deleteDirectoryByID() {
+		$this->captureHookEvent('userman', 'deleteDirectoryByID', ...func_get_args());
+	}
+
+	public function hookBackup_deleteBackup() {
+		$this->captureHookEvent('backup', 'deleteBackup', ...func_get_args());
+	}
+
+	public function hookCertman_updateCertificate() {
+		$this->captureHookEvent('certman', 'updateCertificate', ...func_get_args());
+	}
+
+	public function hookCertman_makeCertDefault() {
+		$this->captureHookEvent('certman', 'makeCertDefault', ...func_get_args());
+	}
+
+	public function hookVoicemail_updateGeneral() {
+		$this->captureHookEvent('voicemail', 'updateGeneral', ...func_get_args());
+	}
+
+	// Tier 2: Time Conditions hooks
+	public function hookTimeconditions_addTimeCondition() {
+		$this->captureHookEvent('timeconditions', 'addTimeCondition', ...func_get_args());
+	}
+
+	public function hookTimeconditions_editTimeCondition() {
+		$this->captureHookEvent('timeconditions', 'editTimeCondition', ...func_get_args());
+	}
+
+	public function hookTimeconditions_delTimeCondition() {
+		$this->captureHookEvent('timeconditions', 'delTimeCondition', ...func_get_args());
+	}
+
+	public function hookTimeconditions_addTimeGroup() {
+		$this->captureHookEvent('timeconditions', 'addTimeGroup', ...func_get_args());
+	}
+
+	public function hookTimeconditions_editTimeGroup() {
+		$this->captureHookEvent('timeconditions', 'editTimeGroup', ...func_get_args());
+	}
+
+	public function hookTimeconditions_delTimeGroup() {
+		$this->captureHookEvent('timeconditions', 'delTimeGroup', ...func_get_args());
+	}
+
+	// Tier 2: Contact Manager hooks
+	public function hookContactmanager_addGroup() {
+		$this->captureHookEvent('contactmanager', 'addGroup', ...func_get_args());
+	}
+
+	public function hookContactmanager_updateGroup() {
+		$this->captureHookEvent('contactmanager', 'updateGroup', ...func_get_args());
+	}
+
+	public function hookContactmanager_deleteGroupByID() {
+		$this->captureHookEvent('contactmanager', 'deleteGroupByID', ...func_get_args());
+	}
+
+	public function hookContactmanager_addEntry() {
+		$this->captureHookEvent('contactmanager', 'addEntry', ...func_get_args());
+	}
+
+	public function hookContactmanager_updateEntry() {
+		$this->captureHookEvent('contactmanager', 'updateEntry', ...func_get_args());
+	}
+
+	public function hookContactmanager_deleteEntryByID() {
+		$this->captureHookEvent('contactmanager', 'deleteEntryByID', ...func_get_args());
+	}
+
+	// Tier 2: UCP hooks
+	public function hookUcp_addGroup() {
+		$this->captureHookEvent('ucp', 'addGroup', ...func_get_args());
+	}
+
+	public function hookUcp_updateGroup() {
+		$this->captureHookEvent('ucp', 'updateGroup', ...func_get_args());
+	}
+
+	public function hookUcp_delGroup() {
+		$this->captureHookEvent('ucp', 'delGroup', ...func_get_args());
+	}
+
+	public function hookUcp_addUser() {
+		$this->captureHookEvent('ucp', 'addUser', ...func_get_args());
+	}
+
+	public function hookUcp_updateUser() {
+		$this->captureHookEvent('ucp', 'updateUser', ...func_get_args());
+	}
+
+	public function hookUcp_delUser() {
+		$this->captureHookEvent('ucp', 'delUser', ...func_get_args());
+	}
+
+	// Tier 2: Calendar hooks
+	public function hookCalendar_sync() {
+		$this->captureHookEvent('calendar', 'sync', ...func_get_args());
+	}
+
+	// Tier 3: Bulk Handler hooks
+	public function hookBulkhandler_import() {
+		$this->captureHookEvent('bulkhandler', 'import', ...func_get_args());
+	}
+
+	public function hookBulkhandler_export() {
+		$this->captureHookEvent('bulkhandler', 'export', ...func_get_args());
+	}
+
+	public function hookBulkhandler_validate() {
+		$this->captureHookEvent('bulkhandler', 'validate', ...func_get_args());
+	}
+
+	// ----------------------------------------------------------------
+	// AJAX handlers for logout and auth failure capture
+	// ----------------------------------------------------------------
+
+	public function ajaxRequest($req, &$setting) {
+		switch ($req) {
+			case 'recordLogout':
+				$setting['changesession'] = true;
+				return true;
+			case 'recordAuthFailure':
+				$setting['authenticate'] = false;
+				return true;
+			case 'recordInterceptedAjax':
+				return true;
+			case 'searchEvents':
+			case 'getFilterValues':
+			case 'getDashboardStats':
+				if (!$this->hasAuditViewPermission()) {
+					return false;
+				}
+				return true;
+			case 'exportEvents':
+				if (!$this->hasAuditViewPermission()) {
+					return false;
+				}
+				return true;
+		}
+		return false;
+	}
+
+	public function ajaxHandler() {
+		$command = $_REQUEST['command'] ?? '';
+		switch ($command) {
+			case 'recordLogout':
+				return $this->handleLogoutAjax();
+			case 'recordAuthFailure':
+				return $this->handleAuthFailureAjax();
+			case 'recordInterceptedAjax':
+				return $this->handleInterceptedAjax();
+			case 'searchEvents':
+				return $this->handleSearchAjax();
+			case 'exportEvents':
+				return $this->handleExportAjax();
+			case 'getFilterValues':
+				return $this->handleFilterValuesAjax();
+			case 'getDashboardStats':
+				return $this->handleDashboardStatsAjax();
+		}
+		return false;
+	}
+
+	// ----------------------------------------------------------------
+	// Auth boundary event writers (immutable, append-only)
+	// ----------------------------------------------------------------
+
+	public function recordLoginEvent($sessionId, $actor) {
+		if ($this->isDuplicateBoundaryEvent($sessionId, 'login')) {
+			return;
+		}
+		$event = $this->buildBoundaryEvent($sessionId, 'login', 'login', 'success', $actor);
+		$this->appendAuditEvent($event);
+		$this->incrementSessionEventCount($sessionId);
+		$_SESSION[self::SESSION_KEY_LOGIN_RECORDED] = $sessionId;
+	}
+
+	public function recordLogoutEvent($sessionId, $actor) {
+		if ($this->isDuplicateBoundaryEvent($sessionId, 'logout')) {
+			return;
+		}
+		$event = $this->buildBoundaryEvent($sessionId, 'logout', 'logout', 'success', $actor);
+		$this->appendAuditEvent($event);
+		$this->incrementSessionEventCount($sessionId);
+		$this->closeSession($sessionId, 'logout');
+	}
+
+	public function recordAuthFailureEvent($attemptedUser, $sourceIp) {
+		$syntheticSessionId = 'authfail_' . bin2hex(random_bytes(16));
+		$event = array(
+			'event_id' => $this->newEventId(),
+			'session_id' => $syntheticSessionId,
+			'session_phase' => 'failure',
+			'channel' => 'auth',
+			'module_name' => 'framework',
+			'action' => 'login',
+			'outcome' => 'failure',
+			'route' => 'config.php',
+			'object_type' => 'auth',
+			'object_id' => '',
+			'actor' => $this->truncate((string) $attemptedUser, 128),
+			'source_ip' => $this->truncate((string) $sourceIp, 64),
+			'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'POST',
+			'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+			'request_hash' => '',
+			'change' => array(
+				'before' => null,
+				'after' => null,
+				'added' => array(),
+				'removed' => array(),
+				'changed' => array('attempted_user' => $this->truncate((string) $attemptedUser, 128))
+			),
+			'occurred_at_unix' => time(),
+			'occurred_at_utc' => gmdate('d-m-Y H:i:s'),
+			'occurred_at_local' => $this->getChisinauTimestamp()
+		);
+		$this->appendAuditEvent($event);
+	}
+
+	// ----------------------------------------------------------------
+	// Read-only timeline API for module GUI
+	// ----------------------------------------------------------------
+
+	public function getRecentSessionTimeline($limit = 25, $offset = 0, $actor = '') {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$limit = max(1, min(200, (int) $limit));
+		$offset = max(0, (int) $offset);
+		$actor = trim((string) $actor);
+
+		$sql = "SELECT session_id, actor, login_at_unix, login_at_utc, login_at_local, end_at_unix, end_at_utc, end_at_local, end_reason, source_ip, user_agent, event_count
+			FROM audit_sessions";
+		$params = array();
+		if ($actor !== '') {
+			$sql .= " WHERE actor = ?";
+			$params[] = $actor;
+		}
+		$sql .= " ORDER BY login_at_unix DESC LIMIT ? OFFSET ?";
+		$params[] = $limit;
+		$params[] = $offset;
+
+		$sth = $pdo->prepare($sql);
+		$sth->execute($params);
+		$sessions = $sth->fetchAll(PDO::FETCH_ASSOC);
+		if (empty($sessions)) {
+			return array();
+		}
+
+		$sessionIds = array_column($sessions, 'session_id');
+		$allEvents = $this->getSessionEventsBatch($sessionIds);
+
+		$timeline = array();
+		foreach ($sessions as $session) {
+			$sid = (string) $session['session_id'];
+			$timeline[] = array(
+				'session' => $session,
+				'events' => $allEvents[$sid] ?? array()
+			);
+		}
+		return $timeline;
+	}
+
+	public function getRecentAuthFailures($limit = 25, $offset = 0, $actor = '') {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$limit = max(1, min(200, (int) $limit));
+		$offset = max(0, (int) $offset);
+		$actor = trim((string) $actor);
+
+		$sql = "SELECT event_id, session_id, channel, module_name, action, outcome, actor, source_ip,
+			occurred_at_unix, occurred_at_utc, occurred_at_local
+			FROM audit_events
+			WHERE session_phase = ? AND outcome = ?";
+		$params = array('failure', 'failure');
+		if ($actor !== '') {
+			$sql .= " AND actor = ?";
+			$params[] = $actor;
+		}
+		$sql .= " ORDER BY occurred_at_unix DESC LIMIT ? OFFSET ?";
+		$params[] = $limit;
+		$params[] = $offset;
+
+		$sth = $pdo->prepare($sql);
+		$sth->execute($params);
+		return $sth->fetchAll(PDO::FETCH_ASSOC);
+	}
+
+	/**
+	 * Advanced event search with multiple filter dimensions.
+	 * All filtering uses prepared statements. Sort field is allowlisted.
+	 */
+	public function searchAuditEvents(array $filters, $limit = 50, $offset = 0, $isExport = false) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$maxLimit = $isExport ? 5000 : 200;
+		$limit = max(1, min($maxLimit, (int) $limit));
+		$offset = max(0, (int) $offset);
+
+		$where = array();
+		$params = array();
+
+		if (!empty($filters['actor'])) {
+			$where[] = "e.actor = ?";
+			$params[] = (string) $filters['actor'];
+		}
+		if (!empty($filters['module_name'])) {
+			$where[] = "e.module_name = ?";
+			$params[] = (string) $filters['module_name'];
+		}
+		if (!empty($filters['action'])) {
+			$where[] = "e.action = ?";
+			$params[] = (string) $filters['action'];
+		}
+		if (!empty($filters['channel'])) {
+			$where[] = "e.channel = ?";
+			$params[] = (string) $filters['channel'];
+		}
+		if (!empty($filters['outcome'])) {
+			$where[] = "e.outcome = ?";
+			$params[] = (string) $filters['outcome'];
+		}
+		if (!empty($filters['source_ip'])) {
+			$where[] = "e.source_ip = ?";
+			$params[] = (string) $filters['source_ip'];
+		}
+		if (!empty($filters['session_phase'])) {
+			$where[] = "e.session_phase = ?";
+			$params[] = (string) $filters['session_phase'];
+		}
+		if (!empty($filters['date_from_unix'])) {
+			$where[] = "e.occurred_at_unix >= ?";
+			$params[] = (int) $filters['date_from_unix'];
+		}
+		if (!empty($filters['date_to_unix'])) {
+			$where[] = "e.occurred_at_unix <= ?";
+			$params[] = (int) $filters['date_to_unix'];
+		}
+		if (!empty($filters['search_text'])) {
+			$term = '%' . str_replace(array('%', '_'), array('\\%', '\\_'), (string) $filters['search_text']) . '%';
+			$where[] = "(e.module_name LIKE ? OR e.action LIKE ? OR e.actor LIKE ? OR e.object_type LIKE ? OR e.object_id LIKE ?)";
+			$params[] = $term;
+			$params[] = $term;
+			$params[] = $term;
+			$params[] = $term;
+			$params[] = $term;
+		}
+
+		$allowedSort = array('occurred_at_unix', 'actor', 'module_name', 'action', 'channel');
+		$sortField = 'occurred_at_unix';
+		if (!empty($filters['sort']) && in_array($filters['sort'], $allowedSort, true)) {
+			$sortField = $filters['sort'];
+		}
+		$sortDir = (!empty($filters['sort_dir']) && strtoupper($filters['sort_dir']) === 'ASC') ? 'ASC' : 'DESC';
+
+		$sql = "SELECT e.event_id, e.session_id, e.session_phase, e.channel, e.module_name, e.action,
+			e.outcome, e.route, e.object_type, e.object_id, e.actor, e.source_ip,
+			e.request_method, e.request_uri, e.change_before, e.change_after,
+			e.change_added, e.change_removed, e.change_changed,
+			e.occurred_at_unix, e.occurred_at_utc, e.occurred_at_local
+			FROM audit_events e";
+		if (!empty($where)) {
+			$sql .= " WHERE " . implode(" AND ", $where);
+		}
+		$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT ? OFFSET ?";
+		$params[] = $limit;
+		$params[] = $offset;
+
+		$sth = $pdo->prepare($sql);
+		$sth->execute($params);
+		$rows = $sth->fetchAll(\PDO::FETCH_ASSOC);
+
+		$countSql = "SELECT COUNT(*) FROM audit_events e";
+		if (!empty($where)) {
+			$countSql .= " WHERE " . implode(" AND ", $where);
+		}
+		$countParams = array_slice($params, 0, count($params) - 2);
+		$csth = $pdo->prepare($countSql);
+		$csth->execute($countParams);
+		$total = (int) $csth->fetchColumn();
+
+		return array('rows' => $rows, 'total' => $total, 'limit' => $limit, 'offset' => $offset);
+	}
+
+	/**
+	 * Return distinct values for filter dropdowns (bounded for safety).
+	 */
+	public function getDistinctFilterValues($column) {
+		$allowed = array('actor', 'module_name', 'action', 'channel', 'outcome', 'session_phase', 'source_ip');
+		if (!in_array($column, $allowed, true)) {
+			return array();
+		}
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "SELECT DISTINCT " . $column . " FROM audit_events ORDER BY " . $column . " ASC LIMIT 500";
+		$sth = $pdo->prepare($sql);
+		$sth->execute();
+		return $sth->fetchAll(\PDO::FETCH_COLUMN);
+	}
+
+	// ----------------------------------------------------------------
+	// Session state management
+	// ----------------------------------------------------------------
+
+	private function ensureSessionState() {
+		$actor = $this->getActor();
+		$currentUnix = time();
+		$idleTimeout = $this->getIdleTimeoutSeconds();
+		$existingSessionId = $_SESSION[self::SESSION_KEY_ID] ?? null;
+		$lastActivity = (int) ($_SESSION[self::SESSION_KEY_LAST_ACTIVITY] ?? 0);
+
+		if (!empty($existingSessionId) && $lastActivity > 0) {
+			if (($currentUnix - $lastActivity) > $idleTimeout) {
+				$this->recordTimeoutEvent((string) $existingSessionId, $actor);
+				$this->closeSession((string) $existingSessionId, 'timeout');
+				unset(
+					$_SESSION[self::SESSION_KEY_ID],
+					$_SESSION[self::SESSION_KEY_LOGIN_RECORDED]
+				);
+			} else {
+				$_SESSION[self::SESSION_KEY_LAST_ACTIVITY] = $currentUnix;
+				return (string) $existingSessionId;
+			}
+		}
+
+		$this->closeStaleActiveSessions($actor);
+
+		$newSessionId = $this->newSessionId();
+		$_SESSION[self::SESSION_KEY_ID] = $newSessionId;
+		$_SESSION[self::SESSION_KEY_LAST_ACTIVITY] = $currentUnix;
+
+		$this->appendSessionStart($newSessionId, $actor);
+		$this->recordLoginEvent($newSessionId, $actor);
+
+		return $newSessionId;
+	}
+
+	private function recordTimeoutEvent($sessionId, $actor) {
+		if ($this->isDuplicateBoundaryEvent($sessionId, 'timeout')) {
+			return;
+		}
+		$event = $this->buildBoundaryEvent($sessionId, 'timeout', 'timeout', 'success', $actor);
+		$this->appendAuditEvent($event);
+		$this->incrementSessionEventCount($sessionId);
+	}
+
+	/**
+	 * Close any sessions for this actor that are still marked active.
+	 * These are from previous logins where the explicit logout event
+	 * was missed (e.g. browser tab closed without JS firing).
+	 */
+	private function closeStaleActiveSessions($actor) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "SELECT session_id, login_at_unix FROM audit_sessions WHERE actor = ? AND end_reason = ?";
+		$sth = $pdo->prepare($sql);
+		$sth->execute(array($actor, 'active'));
+		$stale = $sth->fetchAll(PDO::FETCH_ASSOC);
+
+		$idleTimeout = $this->getIdleTimeoutSeconds();
+		$now = time();
+		foreach ($stale as $row) {
+			$sessionId = (string) $row['session_id'];
+			$loginUnix = (int) $row['login_at_unix'];
+			$reason = (($now - $loginUnix) > $idleTimeout) ? 'timeout' : 'logout';
+			$this->closeSession($sessionId, $reason);
+		}
+	}
+
+	private function getIdleTimeoutSeconds() {
+		$value = (int) ($this->getConfig('audit_session_idle_timeout_seconds') ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
+		return $value > 0 ? $value : self::SESSION_IDLE_TIMEOUT_SECONDS;
+	}
+
+	private function appendSessionStart($sessionId, $actor) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "INSERT INTO audit_sessions (
+			session_id, actor, login_at_unix, login_at_utc, login_at_local, end_reason, source_ip, user_agent, event_count, created_at_unix, created_at_utc, created_at_local
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		$sth = $pdo->prepare($sql);
+		$nowUnix = time();
+		$nowUtc = gmdate('d-m-Y H:i:s');
+		$nowLocal = $this->getChisinauTimestamp();
+		$sth->execute(array(
+			$sessionId,
+			$actor,
+			$nowUnix,
+			$nowUtc,
+			$nowLocal,
+			'active',
+			$this->getRemoteIp(),
+			$this->truncate((string) ($_SERVER['HTTP_USER_AGENT'] ?? ''), 1024),
+			0,
+			$nowUnix,
+			$nowUtc,
+			$nowLocal
+		));
+	}
+
+	private function closeSession($sessionId, $reason) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "UPDATE audit_sessions SET end_at_unix = ?, end_at_utc = ?, end_at_local = ?, end_reason = ? WHERE session_id = ? AND end_reason = ?";
+		$sth = $pdo->prepare($sql);
+		$sth->execute(array(
+			time(),
+			gmdate('d-m-Y H:i:s'),
+			$this->getChisinauTimestamp(),
+			$reason,
+			$sessionId,
+			'active'
+		));
+	}
+
+	private function incrementSessionEventCount($sessionId) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "UPDATE audit_sessions SET event_count = event_count + 1 WHERE session_id = ?";
+		$sth = $pdo->prepare($sql);
+		$sth->execute(array($sessionId));
+	}
+
+	private function markSessionActivity() {
+		$_SESSION[self::SESSION_KEY_LAST_ACTIVITY] = time();
+	}
+
+	// ----------------------------------------------------------------
+	// AJAX handler implementations
+	// ----------------------------------------------------------------
+
+	private function handleLogoutAjax() {
+		$sessionId = $_SESSION[self::SESSION_KEY_ID] ?? null;
+		if (empty($sessionId)) {
+			return array('status' => false, 'message' => 'No active audit session');
+		}
+		$actor = $this->getActor();
+		try {
+			$this->recordLogoutEvent((string) $sessionId, $actor);
+			unset(
+				$_SESSION[self::SESSION_KEY_ID],
+				$_SESSION[self::SESSION_KEY_LAST_ACTIVITY],
+				$_SESSION[self::SESSION_KEY_LOGIN_RECORDED]
+			);
+		} catch (\Throwable $e) {
+			$this->debugLog('Logout audit write failed', array('error' => $e->getMessage()));
+			return array('status' => false, 'message' => 'Audit write failed');
+		}
+		return array('status' => true, 'message' => 'Logout recorded');
+	}
+
+	private function handleAuthFailureAjax() {
+		$sourceIp = $this->getRemoteIp();
+		if (!$this->checkAuthFailureRateLimit($sourceIp)) {
+			return array('status' => false, 'message' => 'Rate limited');
+		}
+		$attemptedUser = $this->truncate(trim((string) ($_REQUEST['username'] ?? '')), 128);
+		if ($attemptedUser === '') {
+			return array('status' => false, 'message' => 'No username provided');
+		}
+		try {
+			$this->recordAuthFailureEvent($attemptedUser, $sourceIp);
+		} catch (\Throwable $e) {
+			$this->debugLog('Auth failure audit write failed', array('error' => $e->getMessage()));
+			return array('status' => false, 'message' => 'Audit write failed');
+		}
+		return array('status' => true, 'message' => 'Auth failure recorded');
+	}
+
+	private function checkAuthFailureRateLimit($ip) {
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$window = time() - 60;
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE session_phase = ? AND source_ip = ? AND occurred_at_unix >= ?");
+			$sth->execute(array('failure', $ip, $window));
+			return ((int) $sth->fetchColumn()) < 20;
+		} catch (\Throwable $e) {
+			return true;
+		}
+	}
+
+	/**
+	 * Handles events from the universal JS AJAX interceptor.
+	 * The client-side script monitors all XMLHttpRequest/fetch calls to ajax.php
+	 * for other modules and beacons the metadata here.
+	 */
+	private function handleInterceptedAjax() {
+		$sessionId = $_SESSION[self::SESSION_KEY_ID] ?? null;
+		if (empty($sessionId)) {
+			return array('status' => false, 'message' => 'No active audit session');
+		}
+		$targetModule = $this->truncate(trim((string) ($_REQUEST['target_module'] ?? '')), 128);
+		$targetCommand = $this->truncate(trim((string) ($_REQUEST['target_command'] ?? '')), 128);
+		$targetMethod = strtoupper(trim((string) ($_REQUEST['target_method'] ?? 'POST')));
+		$targetUrl = $this->truncate(trim((string) ($_REQUEST['target_url'] ?? '')), 2048);
+		$httpStatus = (int) ($_REQUEST['http_status'] ?? 200);
+
+		if ($targetModule === '' || $targetModule === 'auditcompliance') {
+			return array('status' => false, 'message' => 'Skipped');
+		}
+
+		try {
+			$this->routeEvent(array(
+				'session_id' => (string) $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'ajax',
+				'module_name' => $targetModule,
+				'action' => $targetCommand !== '' ? $targetCommand : 'ajax_action',
+				'outcome' => ($httpStatus >= 200 && $httpStatus < 400) ? 'success' : 'failure',
+				'route' => 'ajax.php?module=' . $targetModule,
+				'object_type' => $targetModule,
+				'object_id' => '',
+				'request_method' => $targetMethod,
+				'request_uri' => $targetUrl,
+				'change' => array(
+					'before' => null, 'after' => null,
+					'added' => array(), 'removed' => array(),
+					'changed' => array('command' => $targetCommand, 'http_status' => $httpStatus)
+				)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('Intercepted AJAX audit failed', array('error' => $e->getMessage()));
+			return array('status' => false, 'message' => 'Audit write failed');
+		}
+		return array('status' => true, 'message' => 'AJAX action recorded');
+	}
+
+	private function handleSearchAjax() {
+		$filters = array(
+			'actor' => trim((string) ($_REQUEST['actor'] ?? '')),
+			'module_name' => trim((string) ($_REQUEST['module_name'] ?? '')),
+			'action' => trim((string) ($_REQUEST['action_filter'] ?? '')),
+			'channel' => trim((string) ($_REQUEST['channel'] ?? '')),
+			'outcome' => trim((string) ($_REQUEST['outcome'] ?? '')),
+			'source_ip' => trim((string) ($_REQUEST['source_ip'] ?? '')),
+			'session_phase' => trim((string) ($_REQUEST['session_phase'] ?? '')),
+			'search_text' => trim((string) ($_REQUEST['search_text'] ?? '')),
+			'sort' => trim((string) ($_REQUEST['sort'] ?? '')),
+			'sort_dir' => trim((string) ($_REQUEST['sort_dir'] ?? ''))
+		);
+		$this->parseDateFilters($filters);
+		$limit = max(1, min(200, (int) ($_REQUEST['limit'] ?? 50)));
+		$offset = max(0, (int) ($_REQUEST['offset'] ?? 0));
+		return $this->searchAuditEvents($filters, $limit, $offset);
+	}
+
+	private function handleExportAjax() {
+		if (!$this->checkExportRateLimit()) {
+			return array('status' => false, 'message' => 'Export rate limit exceeded, wait 10 seconds');
+		}
+		$filters = array(
+			'actor' => trim((string) ($_REQUEST['actor'] ?? '')),
+			'module_name' => trim((string) ($_REQUEST['module_name'] ?? '')),
+			'action' => trim((string) ($_REQUEST['action_filter'] ?? '')),
+			'channel' => trim((string) ($_REQUEST['channel'] ?? '')),
+			'outcome' => trim((string) ($_REQUEST['outcome'] ?? '')),
+			'source_ip' => trim((string) ($_REQUEST['source_ip'] ?? '')),
+			'session_phase' => trim((string) ($_REQUEST['session_phase'] ?? '')),
+			'search_text' => trim((string) ($_REQUEST['search_text'] ?? ''))
+		);
+		$this->parseDateFilters($filters);
+		$result = $this->searchAuditEvents($filters, 5000, 0, true);
+		return array('export' => $result['rows'], 'total' => $result['total']);
+	}
+
+	private function parseDateFilters(array &$filters) {
+		$tz = new \DateTimeZone('Europe/Chisinau');
+		$dateFrom = trim((string) ($_REQUEST['date_from'] ?? ''));
+		$dateTo = trim((string) ($_REQUEST['date_to'] ?? ''));
+		if ($dateFrom !== '') {
+			$dt = \DateTime::createFromFormat('Y-m-d', $dateFrom, $tz);
+			if ($dt !== false) {
+				$dt->setTime(0, 0, 0);
+				$filters['date_from_unix'] = $dt->getTimestamp();
+			}
+		}
+		if ($dateTo !== '') {
+			$dt = \DateTime::createFromFormat('Y-m-d', $dateTo, $tz);
+			if ($dt !== false) {
+				$dt->setTime(23, 59, 59);
+				$filters['date_to_unix'] = $dt->getTimestamp();
+			}
+		}
+	}
+
+	private function handleFilterValuesAjax() {
+		$column = trim((string) ($_REQUEST['column'] ?? ''));
+		return array('values' => $this->getDistinctFilterValues($column));
+	}
+
+	private function handleDashboardStatsAjax() {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$now = time();
+		$todayStart = (new \DateTime('today midnight', new \DateTimeZone('Europe/Chisinau')))->getTimestamp();
+		$last24h = $now - 86400;
+
+		$stats = array(
+			'events_today' => 0,
+			'events_total' => 0,
+			'active_sessions' => 0,
+			'auth_failures_24h' => 0,
+			'sensitive_reads_24h' => 0,
+			'top_actors' => array(),
+			'channel_breakdown' => array(),
+			'recent_events' => array(),
+			'timestamp' => $this->getChisinauTimestamp()
+		);
+
+		try {
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE occurred_at_unix >= ?");
+			$sth->execute(array($todayStart));
+			$stats['events_today'] = (int) $sth->fetchColumn();
+
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events");
+			$sth->execute();
+			$stats['events_total'] = (int) $sth->fetchColumn();
+
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_sessions WHERE end_reason = ?");
+			$sth->execute(array('active'));
+			$stats['active_sessions'] = (int) $sth->fetchColumn();
+
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE session_phase = ? AND outcome = ? AND occurred_at_unix >= ?");
+			$sth->execute(array('failure', 'failure', $last24h));
+			$stats['auth_failures_24h'] = (int) $sth->fetchColumn();
+
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE channel = ? AND action LIKE ? AND occurred_at_unix >= ?");
+			$sth->execute(array('gui', '%_access', $last24h));
+			$stats['sensitive_reads_24h'] = (int) $sth->fetchColumn();
+
+			$sth = $pdo->prepare("SELECT actor, COUNT(*) AS cnt FROM audit_events WHERE occurred_at_unix >= ? AND session_phase = ? GROUP BY actor ORDER BY cnt DESC LIMIT 5");
+			$sth->execute(array($todayStart, 'activity'));
+			$stats['top_actors'] = $sth->fetchAll(\PDO::FETCH_ASSOC);
+
+			$sth = $pdo->prepare("SELECT channel, COUNT(*) AS cnt FROM audit_events WHERE occurred_at_unix >= ? GROUP BY channel ORDER BY cnt DESC");
+			$sth->execute(array($todayStart));
+			$stats['channel_breakdown'] = $sth->fetchAll(\PDO::FETCH_ASSOC);
+
+			$sth = $pdo->prepare("SELECT event_id, session_phase, channel, module_name, action, outcome, actor, source_ip, occurred_at_unix, occurred_at_local FROM audit_events ORDER BY occurred_at_unix DESC LIMIT 15");
+			$sth->execute();
+			$stats['recent_events'] = $sth->fetchAll(\PDO::FETCH_ASSOC);
+		} catch (\Throwable $e) {
+			$this->debugLog('Dashboard stats query failed', array('error' => $e->getMessage()));
+		}
+
+		return $stats;
+	}
+
+	// ----------------------------------------------------------------
+	// Audit scripts injection (logout + universal AJAX interceptor)
+	// ----------------------------------------------------------------
+
+	private function injectAuditScripts() {
+		if ($this->auditScriptsInjected) {
+			return;
+		}
+		$this->auditScriptsInjected = true;
+		$js = <<<'JSEOF'
+<script type="text/javascript">
+(function(){
+	"use strict";
+	var AUDIT_AJAX="ajax.php?module=auditcompliance&command=";
+
+	// --- Logout interception ---
+	var logoutSent=false;
+	document.addEventListener("click",function(e){
+		var a=e.target.closest('a[href*="logout=true"]');
+		if(!a||logoutSent)return;
+		logoutSent=true;
+		e.preventDefault();
+		var x=new XMLHttpRequest();
+		x.open("POST",AUDIT_AJAX+"recordLogout",true);
+		x.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+		x.timeout=3000;
+		function go(){window.location.href=a.href;}
+		x.onloadend=go;x.ontimeout=go;x.onerror=go;
+		x.send("");
+	});
+
+	// --- Universal AJAX interceptor ---
+	// Monitors all XMLHttpRequest POST/PUT/DELETE calls to ajax.php
+	// for ANY module (except auditcompliance) and beacons the metadata.
+	var origOpen=XMLHttpRequest.prototype.open;
+	var origSend=XMLHttpRequest.prototype.send;
+	XMLHttpRequest.prototype.open=function(method,url){
+		this._auditMethod=(method||"").toUpperCase();
+		this._auditUrl=String(url||"");
+		return origOpen.apply(this,arguments);
+	};
+	XMLHttpRequest.prototype.send=function(body){
+		var self=this;
+		var m=self._auditMethod||"";
+		var u=self._auditUrl||"";
+		if((m==="POST"||m==="PUT"||m==="DELETE")&&u.indexOf("ajax.php")!==-1&&u.indexOf("module=auditcompliance")===-1){
+			var mod="",cmd="";
+			try{
+				var qIdx=u.indexOf("?");
+				if(qIdx>=0){
+					var params=new URLSearchParams(u.substring(qIdx));
+					mod=params.get("module")||"";
+					cmd=params.get("command")||"";
+				}
+				if(!mod&&body&&typeof body==="string"){
+					var bp=new URLSearchParams(body);
+					if(!mod)mod=bp.get("module")||"";
+					if(!cmd)cmd=bp.get("command")||"";
+				}
+			}catch(e){}
+			if(mod&&mod!=="auditcompliance"){
+				self.addEventListener("loadend",function(){
+					try{
+						var bx=new XMLHttpRequest();
+						bx.open("POST",AUDIT_AJAX+"recordInterceptedAjax",true);
+						bx.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+						bx.timeout=3000;
+						bx.send("target_module="+encodeURIComponent(mod)+"&target_command="+encodeURIComponent(cmd)+"&target_method="+encodeURIComponent(m)+"&target_url="+encodeURIComponent(u.substring(0,500))+"&http_status="+encodeURIComponent(self.status||0));
+					}catch(e){}
+				});
+			}
+		}
+		return origSend.apply(this,arguments);
+	};
+})();
+</script>
+JSEOF;
+		echo $js;
+	}
+
+	// ----------------------------------------------------------------
+	// Boundary event helpers
+	// ----------------------------------------------------------------
+
+	private function buildBoundaryEvent($sessionId, $phase, $action, $outcome, $actor) {
+		return array(
+			'event_id' => $this->newEventId(),
+			'session_id' => (string) $sessionId,
+			'session_phase' => (string) $phase,
+			'channel' => 'auth',
+			'module_name' => 'framework',
+			'action' => (string) $action,
+			'outcome' => (string) $outcome,
+			'route' => 'config.php',
+			'object_type' => 'session',
+			'object_id' => (string) $sessionId,
+			'actor' => (string) $actor,
+			'source_ip' => $this->getRemoteIp(),
+			'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'GET',
+			'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+			'request_hash' => '',
+			'change' => array(
+				'before' => null,
+				'after' => null,
+				'added' => array(),
+				'removed' => array(),
+				'changed' => array()
+			),
+			'occurred_at_unix' => time(),
+			'occurred_at_utc' => gmdate('d-m-Y H:i:s'),
+			'occurred_at_local' => $this->getChisinauTimestamp()
+		);
+	}
+
+	private function isDuplicateBoundaryEvent($sessionId, $phase) {
+		if ($phase === 'login') {
+			return ($_SESSION[self::SESSION_KEY_LOGIN_RECORDED] ?? null) === $sessionId;
+		}
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$sql = "SELECT COUNT(*) FROM audit_events WHERE session_id = ? AND session_phase = ?";
+			$sth = $pdo->prepare($sql);
+			$sth->execute(array((string) $sessionId, (string) $phase));
+			return ((int) $sth->fetchColumn()) > 0;
+		} catch (\Throwable $e) {
+			return false;
+		}
+	}
+
+	// ----------------------------------------------------------------
+	// Immutable event writer
+	// ----------------------------------------------------------------
+
+	private function appendAuditEvent(array $event) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "INSERT INTO audit_events (
+			event_id, session_id, session_phase, channel, module_name, action, outcome, route, object_type, object_id,
+			actor, source_ip, request_method, request_uri, request_hash,
+			change_before, change_after, change_added, change_removed, change_changed,
+			occurred_at_unix, occurred_at_utc, occurred_at_local
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+		$sth = $pdo->prepare($sql);
+		$sth->execute(array(
+			$event['event_id'],
+			$event['session_id'],
+			$event['session_phase'],
+			$event['channel'],
+			$this->truncate((string) $event['module_name'], 128),
+			$this->truncate((string) $event['action'], 128),
+			$this->truncate((string) $event['outcome'], 32),
+			$this->truncate((string) $event['route'], 1024),
+			$this->truncate((string) $event['object_type'], 128),
+			$this->truncate((string) $event['object_id'], 256),
+			$this->truncate((string) $event['actor'], 128),
+			$this->truncate((string) $event['source_ip'], 64),
+			$this->truncate((string) $event['request_method'], 16),
+			$this->truncate((string) $event['request_uri'], 2048),
+			$this->truncate((string) $event['request_hash'], 128),
+			$this->safeJsonEncode($event['change']['before']),
+			$this->safeJsonEncode($event['change']['after']),
+			$this->safeJsonEncode($event['change']['added']),
+			$this->safeJsonEncode($event['change']['removed']),
+			$this->safeJsonEncode($event['change']['changed']),
+			(int) $event['occurred_at_unix'],
+			$this->truncate((string) $event['occurred_at_utc'], 19),
+			$this->truncate((string) $event['occurred_at_local'], 19)
+		));
+	}
+
+	// ----------------------------------------------------------------
+	// Change payload / redaction
+	// ----------------------------------------------------------------
+
+	private function buildChangePayload(array $request) {
+		$redacted = $this->redactSensitiveData($request);
+		return array(
+			'before' => null,
+			'after' => null,
+			'added' => array(),
+			'removed' => array(),
+			'changed' => $redacted
+		);
+	}
+
+	private function redactSensitiveData(array $input) {
+		static $substringPatterns = array(
+			'password', 'passwd', 'secret', 'api_key', 'private_key',
+			'access_token', 'refresh_token', 'credential',
+			'privatekey', 'tlskey', 'tlsprivate', 'ampmgrpass',
+			'fcc_password', 'turnpassword'
+		);
+		static $exactPatterns = array(
+			'pass', 'pin', 'userpin', 'adminpin', 'token',
+			'oauth_secret', 'oauth_token', 'cert_key', 'tls_cert_key'
+		);
+		static $suffixPatterns = array(
+			'_pass', '_pin', '_secret', '_token', '_key', '_cert_pem',
+			'_private', '_privkey'
+		);
+		$out = array();
+		foreach ($input as $key => $value) {
+			$k = strtolower((string) $key);
+			$isSensitive = false;
+			if (in_array($k, $exactPatterns, true)) {
+				$isSensitive = true;
+			}
+			if (!$isSensitive) {
+				foreach ($substringPatterns as $s) {
+					if (strpos($k, $s) !== false) {
+						$isSensitive = true;
+						break;
+					}
+				}
+			}
+			if (!$isSensitive) {
+				foreach ($suffixPatterns as $s) {
+					if (substr($k, -strlen($s)) === $s) {
+						$isSensitive = true;
+						break;
+					}
+				}
+			}
+			if ($isSensitive) {
+				$out[$key] = '***REDACTED***';
+				continue;
+			}
+			if (is_array($value)) {
+				$out[$key] = $this->redactSensitiveData($value);
+			} elseif (is_scalar($value) || $value === null) {
+				$out[$key] = $this->truncate((string) $value, 2048);
+			}
+		}
+		return $out;
+	}
+
+	private function extractObjectIdFromArgs(array $args) {
+		foreach ($args as $arg) {
+			if (is_scalar($arg) && $arg !== '' && $arg !== null) {
+				return $this->truncate((string) $arg, 256);
+			}
+			if (is_array($arg)) {
+				foreach (array('id', 'extension', 'user_id', 'ext', 'name') as $k) {
+					if (isset($arg[$k]) && $arg[$k] !== '') {
+						return $this->truncate((string) $arg[$k], 256);
+					}
+				}
+			}
+		}
+		return '';
+	}
+
+	private function flattenHookArgs(array $args) {
+		$out = array();
+		foreach ($args as $i => $arg) {
+			if (is_array($arg)) {
+				$out['arg_' . $i] = $this->redactSensitiveData($arg);
+			} elseif (is_scalar($arg) || $arg === null) {
+				$out['arg_' . $i] = $this->truncate((string) $arg, 2048);
+			}
+		}
+		return $out;
+	}
+
+	// ----------------------------------------------------------------
+	// Schema management
+	// ----------------------------------------------------------------
+
+	private function ensureAuditSchema() {
+		if ($this->schemaReady) {
+			return;
+		}
+		$pdo = $this->getAuditDb();
+
+		try {
+			$sth = $pdo->prepare("SELECT 1 FROM audit_events LIMIT 1");
+			$sth->execute();
+			$this->schemaReady = true;
+			return;
+		} catch (\Throwable $e) {
+			// Table doesn't exist yet — proceed with full DDL
+		}
+
+		$driver = $this->getDriverName($pdo);
+		$this->createBaseTables($pdo, $driver);
+		$this->createIndexes($pdo, $driver);
+		$this->createImmutabilityTriggers($pdo, $driver);
+		$this->schemaReady = true;
+	}
+
+	private function createBaseTables(PDO $pdo, $driver) {
+		if ($driver === 'pgsql') {
+			$pdo->exec("CREATE TABLE IF NOT EXISTS audit_sessions (
+				session_id VARCHAR(64) PRIMARY KEY,
+				actor VARCHAR(128) NOT NULL,
+				login_at_unix BIGINT NOT NULL,
+				login_at_utc VARCHAR(19) NOT NULL,
+				login_at_local VARCHAR(19) NOT NULL,
+				end_at_unix BIGINT NULL,
+				end_at_utc VARCHAR(19) NULL,
+				end_at_local VARCHAR(19) NULL,
+				end_reason VARCHAR(32) NOT NULL DEFAULT 'active',
+				source_ip VARCHAR(64) NULL,
+				user_agent TEXT NULL,
+				event_count INTEGER NOT NULL DEFAULT 0,
+				created_at_unix BIGINT NOT NULL,
+				created_at_utc VARCHAR(19) NOT NULL,
+				created_at_local VARCHAR(19) NOT NULL
+			)");
+			$pdo->exec("CREATE TABLE IF NOT EXISTS audit_events (
+				event_id VARCHAR(64) PRIMARY KEY,
+				session_id VARCHAR(64) NOT NULL,
+				session_phase VARCHAR(16) NOT NULL,
+				channel VARCHAR(16) NOT NULL,
+				module_name VARCHAR(128) NOT NULL,
+				action VARCHAR(128) NOT NULL,
+				outcome VARCHAR(32) NOT NULL,
+				route VARCHAR(1024) NOT NULL,
+				object_type VARCHAR(128) NOT NULL,
+				object_id VARCHAR(256) NOT NULL,
+				actor VARCHAR(128) NOT NULL,
+				source_ip VARCHAR(64) NOT NULL,
+				request_method VARCHAR(16) NOT NULL,
+				request_uri VARCHAR(2048) NOT NULL,
+				request_hash VARCHAR(128) NOT NULL,
+				change_before TEXT NULL,
+				change_after TEXT NULL,
+				change_added TEXT NULL,
+				change_removed TEXT NULL,
+				change_changed TEXT NULL,
+				occurred_at_unix BIGINT NOT NULL,
+				occurred_at_utc VARCHAR(19) NOT NULL,
+				occurred_at_local VARCHAR(19) NOT NULL
+			)");
+			return;
+		}
+
+		$pdo->exec("CREATE TABLE IF NOT EXISTS audit_sessions (
+			session_id VARCHAR(64) PRIMARY KEY,
+			actor VARCHAR(128) NOT NULL,
+			login_at_unix BIGINT NOT NULL,
+			login_at_utc VARCHAR(19) NOT NULL,
+			login_at_local VARCHAR(19) NOT NULL,
+			end_at_unix BIGINT NULL,
+			end_at_utc VARCHAR(19) NULL,
+			end_at_local VARCHAR(19) NULL,
+			end_reason VARCHAR(32) NOT NULL DEFAULT 'active',
+			source_ip VARCHAR(64) NULL,
+			user_agent TEXT NULL,
+			event_count INT NOT NULL DEFAULT 0,
+			created_at_unix BIGINT NOT NULL,
+			created_at_utc VARCHAR(19) NOT NULL,
+			created_at_local VARCHAR(19) NOT NULL
+		)");
+		$pdo->exec("CREATE TABLE IF NOT EXISTS audit_events (
+			event_id VARCHAR(64) PRIMARY KEY,
+			session_id VARCHAR(64) NOT NULL,
+			session_phase VARCHAR(16) NOT NULL,
+			channel VARCHAR(16) NOT NULL,
+			module_name VARCHAR(128) NOT NULL,
+			action VARCHAR(128) NOT NULL,
+			outcome VARCHAR(32) NOT NULL,
+			route VARCHAR(1024) NOT NULL,
+			object_type VARCHAR(128) NOT NULL,
+			object_id VARCHAR(256) NOT NULL,
+			actor VARCHAR(128) NOT NULL,
+			source_ip VARCHAR(64) NOT NULL,
+			request_method VARCHAR(16) NOT NULL,
+			request_uri VARCHAR(2048) NOT NULL,
+			request_hash VARCHAR(128) NOT NULL,
+			change_before LONGTEXT NULL,
+			change_after LONGTEXT NULL,
+			change_added LONGTEXT NULL,
+			change_removed LONGTEXT NULL,
+			change_changed LONGTEXT NULL,
+			occurred_at_unix BIGINT NOT NULL,
+			occurred_at_utc VARCHAR(19) NOT NULL,
+			occurred_at_local VARCHAR(19) NOT NULL
+		)");
+	}
+
+	private function createIndexes(PDO $pdo, $driver) {
+		if ($driver === 'pgsql') {
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_session_id ON audit_events (session_id)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_occurred_at_unix ON audit_events (occurred_at_unix)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_actor ON audit_events (actor)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_module_name ON audit_events (module_name)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_session_phase ON audit_events (session_phase)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_channel ON audit_events (channel)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_events_dedup ON audit_events (session_id, module_name, action, object_id, occurred_at_unix)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_sessions_login_at_unix ON audit_sessions (login_at_unix)");
+			$pdo->exec("CREATE INDEX IF NOT EXISTS idx_audit_sessions_actor_end ON audit_sessions (actor, end_reason)");
+			return;
+		}
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_session_id ON audit_events (session_id)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_occurred_at_unix ON audit_events (occurred_at_unix)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_actor ON audit_events (actor)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_module_name ON audit_events (module_name)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_session_phase ON audit_events (session_phase)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_channel ON audit_events (channel)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_events_dedup ON audit_events (session_id, module_name, action, object_id, occurred_at_unix)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_sessions_login_at_unix ON audit_sessions (login_at_unix)");
+		$this->safeExec($pdo, "CREATE INDEX idx_audit_sessions_actor_end ON audit_sessions (actor, end_reason)");
+	}
+
+	private function createImmutabilityTriggers(PDO $pdo, $driver) {
+		if ($driver === 'pgsql') {
+			$pdo->exec("CREATE OR REPLACE FUNCTION audit_deny_modifications() RETURNS trigger AS \$\$
+				BEGIN
+					RAISE EXCEPTION 'Audit tables are append-only';
+				END;
+			\$\$ LANGUAGE plpgsql");
+			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_update ON audit_events");
+			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_delete ON audit_events");
+			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_sessions_no_delete ON audit_sessions");
+			$pdo->exec("CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+			$pdo->exec("CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+			$pdo->exec("CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+			return;
+		}
+
+		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_events_no_update");
+		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_events_no_delete");
+		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_sessions_no_delete");
+		$pdo->exec("CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events
+			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
+		$pdo->exec("CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events
+			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
+		$pdo->exec("CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions
+			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
+	}
+
+	// ----------------------------------------------------------------
+	// RBAC and rate limiting
+	// ----------------------------------------------------------------
+
+	private function hasAuditViewPermission() {
+		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+			return false;
+		}
+		return $_SESSION['AMP_user']->checkSection('auditcompliance');
+	}
+
+	private function checkExportRateLimit() {
+		$key = 'auditcompliance_export_last';
+		$minInterval = 10;
+		$lastExport = (int) ($_SESSION[$key] ?? 0);
+		$now = time();
+		if (($now - $lastExport) < $minInterval) {
+			return false;
+		}
+		$_SESSION[$key] = $now;
+		return true;
+	}
+
+	// ----------------------------------------------------------------
+	// Database connection
+	// ----------------------------------------------------------------
+
+	private function getAuditDb() {
+		if ($this->auditDb instanceof PDO) {
+			return $this->auditDb;
+		}
+
+		$dsn = trim((string) ($this->getConfig('audit_db_dsn') ?? ''));
+		$user = (string) ($this->getConfig('audit_db_user') ?? '');
+		$password = (string) ($this->getConfig('audit_db_password') ?? '');
+		$requireTls = ((string) ($this->getConfig('audit_db_require_tls') ?? '1')) === '1';
+
+		if ($dsn === '') {
+			$this->auditDb = $this->db;
+			return $this->auditDb;
+		}
+
+		$this->validateDsnSecurity($dsn, $requireTls);
+		$options = array(
+			PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+			PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+		);
+		$this->auditDb = new PDO($dsn, $user, $password, $options);
+		return $this->auditDb;
+	}
+
+	private function validateDsnSecurity($dsn, $requireTls) {
+		if (!$requireTls) {
+			return;
+		}
+		$dsnLower = strtolower($dsn);
+		if (strpos($dsnLower, 'mysql:') === 0) {
+			if (strpos($dsnLower, 'ssl') === false) {
+				throw new \Exception('TLS is required for MySQL/MariaDB audit DB connections');
+			}
+			return;
+		}
+		if (strpos($dsnLower, 'pgsql:') === 0) {
+			if (strpos($dsnLower, 'sslmode=') === false) {
+				throw new \Exception('TLS is required for PostgreSQL audit DB connections');
+			}
+		}
+	}
+
+	// ----------------------------------------------------------------
+	// Internal read helpers
+	// ----------------------------------------------------------------
+
+	private function getSessionEvents($sessionId) {
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$sql = "SELECT event_id, session_phase, channel, module_name, action, outcome, object_type, object_id,
+			actor, source_ip, request_method, request_uri, request_hash, change_before, change_after,
+			change_added, change_removed, change_changed, occurred_at_unix, occurred_at_utc, occurred_at_local
+			FROM audit_events
+			WHERE session_id = ?
+			ORDER BY occurred_at_unix ASC";
+		$sth = $pdo->prepare($sql);
+		$sth->execute(array($sessionId));
+		return $sth->fetchAll(PDO::FETCH_ASSOC);
+	}
+
+	private function getSessionEventsBatch(array $sessionIds) {
+		if (empty($sessionIds)) {
+			return array();
+		}
+		$this->ensureAuditSchema();
+		$pdo = $this->getAuditDb();
+		$placeholders = implode(',', array_fill(0, count($sessionIds), '?'));
+		$sql = "SELECT event_id, session_id, session_phase, channel, module_name, action, outcome, object_type, object_id,
+			actor, source_ip, request_method, request_uri, request_hash, change_before, change_after,
+			change_added, change_removed, change_changed, occurred_at_unix, occurred_at_utc, occurred_at_local
+			FROM audit_events
+			WHERE session_id IN ({$placeholders})
+			ORDER BY occurred_at_unix ASC";
+		$sth = $pdo->prepare($sql);
+		$sth->execute($sessionIds);
+		$rows = $sth->fetchAll(PDO::FETCH_ASSOC);
+
+		$grouped = array();
+		foreach ($rows as $row) {
+			$grouped[$row['session_id']][] = $row;
+		}
+		return $grouped;
+	}
+
+	// ----------------------------------------------------------------
+	// Utilities
+	// ----------------------------------------------------------------
+
+	private function getDriverName(PDO $pdo) {
+		try {
+			return (string) $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+		} catch (PDOException $e) {
+			return '';
+		}
+	}
+
+	private function setDefaultConfigIfMissing($key, $value) {
+		$current = $this->getConfig($key);
+		if ($current === null || $current === '') {
+			$this->setConfig($key, $value);
+		}
+	}
+
+	private function normalizeAction($action, $method) {
+		$actionLower = strtolower(trim((string) $action));
+		if ($actionLower !== '') {
+			return $actionLower;
+		}
+		return strtolower((string) $method) === 'post' ? 'update' : 'view';
+	}
+
+	private function detectObjectType($display) {
+		return strtolower((string) $display);
+	}
+
+	private function detectObjectId() {
+		$candidates = array(
+			'id', 'extdisplay', 'account', 'trunkid', 'user_id',
+			'itemid', 'group_id', 'entry_id', 'queue', 'grpnum',
+			'ext', 'extension', 'cidnum', 'backup_id', 'tcid',
+			'tgid', 'confno', 'pagegrp', 'rg', 'ivr_id',
+			'faxid', 'calendar_id', 'pinsets_id', 'scheme'
+		);
+		foreach ($candidates as $key) {
+			if (!empty($_REQUEST[$key])) {
+				return (string) $_REQUEST[$key];
+			}
+		}
+		return '';
+	}
+
+	private function getActor() {
+		if (isset($_SESSION['AMP_user']) && is_object($_SESSION['AMP_user']) && isset($_SESSION['AMP_user']->username)) {
+			return (string) $_SESSION['AMP_user']->username;
+		}
+		return 'unknown';
+	}
+
+	private function getRemoteIp() {
+		return (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+	}
+
+	private function hashRequest(array $request) {
+		return hash('sha256', $this->safeJsonEncode($this->redactSensitiveData($request)));
+	}
+
+	private function safeJsonEncode($value) {
+		$json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+		if ($json === false) {
+			$this->debugLog('JSON encode failed', array('error' => json_last_error_msg()));
+			return '{}';
+		}
+		return $json;
+	}
+
+	private function safeExec(PDO $pdo, $sql) {
+		try {
+			$pdo->exec($sql);
+		} catch (PDOException $e) {
+			$msg = strtolower((string) $e->getMessage());
+			$ignorable = (strpos($msg, 'already exists') !== false) ||
+				(strpos($msg, 'duplicate key name') !== false) ||
+				(strpos($msg, 'duplicate') !== false) ||
+				(strpos($msg, 'does not exist') !== false);
+			if (!$ignorable) {
+				throw $e;
+			}
+		}
+	}
+
+	private function truncate($value, $maxLen) {
+		$value = (string) $value;
+		if (mb_strlen($value, 'UTF-8') <= $maxLen) {
+			return $value;
+		}
+		return mb_substr($value, 0, $maxLen, 'UTF-8');
+	}
+
+	private function newSessionId() {
+		return 'sess_' . bin2hex(random_bytes(16));
+	}
+
+	private function newEventId() {
+		return 'evt_' . bin2hex(random_bytes(16));
+	}
+
+	private function getChisinauTimestamp() {
+		$dt = new \DateTime('now', new \DateTimeZone('Europe/Chisinau'));
+		return $dt->format('d-m-Y H:i:s');
+	}
+
+	private function debugLog($message, array $context = array()) {
+		$prefix = sprintf('[%s] ', $this->getChisinauTimestamp());
+		$this->FreePBX->Logger->debug($prefix . $message . ' ' . $this->safeJsonEncode($context));
+	}
+}

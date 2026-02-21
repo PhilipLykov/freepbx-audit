@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<module>
+	<rawname>auditcompliance</rawname>
+	<repo>standard</repo>
+	<name>Audit Compliance</name>
+	<version>17.0.0alpha1</version>
+	<publisher>Internal</publisher>
+	<license>GPLv3+</license>
+	<licenselink>http://www.gnu.org/licenses/gpl-3.0.txt</licenselink>
+	<category>Reports</category>
+	<description>Immutable compliance audit logging for FreePBX Web GUI administrator actions</description>
+	<menuitems>
+		<auditcompliance>Audit Compliance</auditcompliance>
+	</menuitems>
+	<depends>
+		<framework>17.0.1</framework>
+	</depends>
+	<supported>
+		<version>17.0</version>
+	</supported>
+	<hooks>
+		<!-- Tier 1: Core PBX management -->
+		<core class="Core" namespace="FreePBX\modules">
+			<method callingMethod="processQuickCreate" class="Auditcompliance" namespace="FreePBX\modules">hookCore_processQuickCreate</method>
+			<method callingMethod="addDevice" class="Auditcompliance" namespace="FreePBX\modules">hookCore_addDevice</method>
+			<method callingMethod="delDevice" class="Auditcompliance" namespace="FreePBX\modules">hookCore_delDevice</method>
+			<method callingMethod="addUser" class="Auditcompliance" namespace="FreePBX\modules">hookCore_addUser</method>
+			<method callingMethod="delUser" class="Auditcompliance" namespace="FreePBX\modules">hookCore_delUser</method>
+			<method callingMethod="addDID" class="Auditcompliance" namespace="FreePBX\modules">hookCore_addDID</method>
+			<method callingMethod="delDID" class="Auditcompliance" namespace="FreePBX\modules">hookCore_delDID</method>
+		</core>
+		<!-- Tier 1: User management -->
+		<userman class="Userman" namespace="FreePBX\modules">
+			<method callingMethod="addUserByDirectory" class="Auditcompliance" namespace="FreePBX\modules">hookUserman_addUserByDirectory</method>
+			<method callingMethod="updateUser" class="Auditcompliance" namespace="FreePBX\modules">hookUserman_updateUser</method>
+			<method callingMethod="deleteUserByID" class="Auditcompliance" namespace="FreePBX\modules">hookUserman_deleteUserByID</method>
+			<method callingMethod="updateGroup" class="Auditcompliance" namespace="FreePBX\modules">hookUserman_updateGroup</method>
+			<method callingMethod="deleteDirectoryByID" class="Auditcompliance" namespace="FreePBX\modules">hookUserman_deleteDirectoryByID</method>
+		</userman>
+		<!-- Tier 1: Backup -->
+		<backup class="Backup" namespace="FreePBX\modules">
+			<method callingMethod="deleteBackup" class="Auditcompliance" namespace="FreePBX\modules">hookBackup_deleteBackup</method>
+		</backup>
+		<!-- Tier 1: Certificate management -->
+		<certman class="Certman" namespace="FreePBX\modules">
+			<method callingMethod="updateCertificate" class="Auditcompliance" namespace="FreePBX\modules">hookCertman_updateCertificate</method>
+			<method callingMethod="makeCertDefault" class="Auditcompliance" namespace="FreePBX\modules">hookCertman_makeCertDefault</method>
+		</certman>
+		<!-- Tier 1: Voicemail -->
+		<voicemail class="Voicemail" namespace="FreePBX\modules">
+			<method callingMethod="updateGeneral" class="Auditcompliance" namespace="FreePBX\modules">hookVoicemail_updateGeneral</method>
+		</voicemail>
+		<!-- Tier 2: Time conditions -->
+		<timeconditions class="Timeconditions" namespace="FreePBX\modules">
+			<method callingMethod="addTimeCondition" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_addTimeCondition</method>
+			<method callingMethod="editTimeCondition" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_editTimeCondition</method>
+			<method callingMethod="delTimeCondition" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_delTimeCondition</method>
+			<method callingMethod="addTimeGroup" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_addTimeGroup</method>
+			<method callingMethod="editTimeGroup" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_editTimeGroup</method>
+			<method callingMethod="delTimeGroup" class="Auditcompliance" namespace="FreePBX\modules">hookTimeconditions_delTimeGroup</method>
+		</timeconditions>
+		<!-- Tier 2: Contact manager -->
+		<contactmanager class="Contactmanager" namespace="FreePBX\modules">
+			<method callingMethod="addGroup" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_addGroup</method>
+			<method callingMethod="updateGroup" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_updateGroup</method>
+			<method callingMethod="deleteGroupByID" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_deleteGroupByID</method>
+			<method callingMethod="addEntry" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_addEntry</method>
+			<method callingMethod="updateEntry" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_updateEntry</method>
+			<method callingMethod="deleteEntryByID" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_deleteEntryByID</method>
+		</contactmanager>
+		<!-- Tier 2: UCP (User Control Panel) -->
+		<ucp class="Ucp" namespace="FreePBX\modules">
+			<method callingMethod="addGroup" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_addGroup</method>
+			<method callingMethod="updateGroup" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_updateGroup</method>
+			<method callingMethod="delGroup" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_delGroup</method>
+			<method callingMethod="addUser" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_addUser</method>
+			<method callingMethod="updateUser" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_updateUser</method>
+			<method callingMethod="delUser" class="Auditcompliance" namespace="FreePBX\modules">hookUcp_delUser</method>
+		</ucp>
+		<!-- Tier 2: Calendar -->
+		<calendar class="Calendar" namespace="FreePBX\modules">
+			<method callingMethod="sync" class="Auditcompliance" namespace="FreePBX\modules">hookCalendar_sync</method>
+		</calendar>
+		<!-- Tier 3: Bulk handler -->
+		<bulkhandler class="Bulkhandler" namespace="FreePBX\modules">
+			<method callingMethod="import" class="Auditcompliance" namespace="FreePBX\modules">hookBulkhandler_import</method>
+			<method callingMethod="export" class="Auditcompliance" namespace="FreePBX\modules">hookBulkhandler_export</method>
+			<method callingMethod="validate" class="Auditcompliance" namespace="FreePBX\modules">hookBulkhandler_validate</method>
+		</bulkhandler>
+	</hooks>
+</module>
