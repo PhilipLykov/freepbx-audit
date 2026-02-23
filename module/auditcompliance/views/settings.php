@@ -5,6 +5,9 @@ $storageStatus = is_array($storageStatus ?? null) ? $storageStatus : null;
 $settingsNotice = is_array($settingsNotice ?? null) ? $settingsNotice : null;
 $csrfToken = (string) ($csrfToken ?? '');
 $showStorageStatus = $storageStatus !== null;
+if ($showStorageStatus && $settingsNotice) {
+	$showStorageStatus = empty($settingsNotice['status']);
+}
 if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $storageStatus['message'])) {
 	$showStorageStatus = ((string) $settingsNotice['message']) !== ((string) $storageStatus['message']);
 }

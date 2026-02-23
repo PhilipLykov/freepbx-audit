@@ -11,7 +11,6 @@ if (!isset($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user']) || !$_SES
 $request = $_REQUEST;
 $view = $request['view'] ?? 'dashboard';
 $actorFilter = $request['actor'] ?? '';
-$storageStatus = null;
 $csrfSessionKey = 'auditcompliance_settings_csrf';
 
 if (empty($_SESSION[$csrfSessionKey])) {
@@ -41,13 +40,6 @@ if ($view === 'settings' && strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? '
 			$settingsNotice = FreePBX::Auditcompliance()->saveSettingsFromUi($_POST);
 		}
 	}
-	}
-}
-
-if ($view !== 'settings') {
-	$storageStatus = FreePBX::Auditcompliance()->getAuditStorageStatus();
-	if (is_array($storageStatus) && empty($storageStatus['status'])) {
-		echo '<div class="alert alert-warning">' . htmlspecialchars((string) ($storageStatus['message'] ?? _('Audit storage is not available.')), ENT_QUOTES, 'UTF-8') . '</div>';
 	}
 }
 
