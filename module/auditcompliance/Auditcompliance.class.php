@@ -656,13 +656,17 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 */
 	public function getSettingsSnapshot() {
 		$password = (string) $this->getConfigSafe('audit_db_password', '');
+		$odbcBackend = (string) $this->getConfigSafe('audit_db_odbc_backend', '');
+		$dsn = $this->normalizeOdbcDsnInput((string) $this->getConfigSafe('audit_db_dsn', ''), $odbcBackend);
+		$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
 		return array(
-			'audit_db_dsn' => (string) $this->getConfigSafe('audit_db_dsn', ''),
+			'audit_connection_type' => $connectionType,
+			'audit_db_dsn' => $dsn,
 			'audit_db_user' => (string) $this->getConfigSafe('audit_db_user', ''),
 			'audit_db_password' => '',
 			'audit_db_password_set' => ($password !== ''),
 			'audit_db_require_tls' => ((string) $this->getConfigSafe('audit_db_require_tls', '1') === '1') ? '1' : '0',
-			'audit_db_odbc_backend' => (string) $this->getConfigSafe('audit_db_odbc_backend', ''),
+			'audit_db_odbc_backend' => $odbcBackend,
 			'audit_require_external_db' => ((string) $this->getConfigSafe('audit_require_external_db', '1') === '1') ? '1' : '0',
 			'audit_session_idle_timeout_seconds' => (string) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS)
 		);
@@ -1899,6 +1903,9 @@ JSEOF;
 		$password = (string) ($this->getConfigSafe('audit_db_password', ''));
 		$requireTls = ($this->getConfigSafe('audit_db_require_tls', '1')) === '1';
 		$requireExternal = ($this->getConfigSafe('audit_require_external_db', '1')) === '1';
+		$odbcBackend = strtolower(trim((string) ($this->getConfigSafe('audit_db_odbc_backend', ''))));
+		$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
+		$dsn = $this->normalizeDsnInput($dsn, $connectionType, $odbcBackend);
 
 		if ($dsn === '') {
 			if ($requireExternal) {
@@ -2120,19 +2127,40 @@ JSEOF;
 		$requireTls = !empty($input['audit_db_require_tls']) ? '1' : '0';
 		$requireExternal = !empty($input['audit_require_external_db']) ? '1' : '0';
 		$odbcBackend = strtolower(trim((string) ($input['audit_db_odbc_backend'] ?? '')));
+		$connectionType = strtolower(trim((string) ($input['audit_connection_type'] ?? '')));
+		if ($connectionType === '') {
+			$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
+		}
+		if (!in_array($connectionType, array('mysql', 'pgsql', 'odbc'), true)) {
+			return array('status' => false, 'message' => 'Connection type must be mysql, pgsql, or odbc');
+		}
+		$dsn = $this->normalizeDsnInput($dsn, $connectionType, $odbcBackend);
+		$dsnScheme = $this->getDsnScheme($dsn);
 		$idleTimeout = (int) ($input['audit_session_idle_timeout_seconds'] ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
 
 		if (!in_array($odbcBackend, array('', 'mysql', 'pgsql'), true)) {
 			return array('status' => false, 'message' => 'ODBC backend must be empty, mysql, or pgsql');
 		}
+		if ($connectionType !== 'odbc') {
+			$odbcBackend = '';
+		}
 		if ($idleTimeout < 60 || $idleTimeout > 86400) {
 			return array('status' => false, 'message' => 'Idle timeout must be between 60 and 86400 seconds');
 		}
-		if ($dsn !== '' && strpos(strtolower($dsn), 'odbc:') === 0 && $odbcBackend === '') {
-			return array('status' => false, 'message' => 'ODBC backend is required when DSN starts with odbc:');
+		if ($connectionType === 'odbc' && $odbcBackend === '') {
+			$odbcBackend = 'mysql';
 		}
 		if ($dsn === '' && $requireExternal === '1') {
 			return array('status' => false, 'message' => 'External audit DB is required. Configure Audit DB DSN.');
+		}
+		if ($dsn !== '' && $connectionType === 'mysql' && $dsnScheme !== 'mysql') {
+			return array('status' => false, 'message' => 'For Direct MySQL/MariaDB connection, DSN must start with mysql:');
+		}
+		if ($dsn !== '' && $connectionType === 'pgsql' && $dsnScheme !== 'pgsql') {
+			return array('status' => false, 'message' => 'For Direct PostgreSQL connection, DSN must start with pgsql:');
+		}
+		if ($dsn !== '' && $connectionType === 'odbc' && $dsnScheme !== 'odbc') {
+			return array('status' => false, 'message' => 'For ODBC connection, DSN must start with odbc: (or be an ODBC DSN name).');
 		}
 
 		try {
@@ -2176,6 +2204,58 @@ JSEOF;
 		if (!in_array($scheme, array('mysql', 'pgsql', 'odbc'), true)) {
 			throw new \Exception('Unsupported DSN scheme "' . $scheme . '". Supported schemes: mysql, pgsql, odbc.');
 		}
+	}
+
+	private function normalizeOdbcDsnInput($dsn, $odbcBackend) {
+		$dsn = trim((string) $dsn);
+		if ($dsn === '') {
+			return '';
+		}
+		if (strpos($dsn, ':') === false) {
+			return 'odbc:' . $dsn;
+		}
+		return $dsn;
+	}
+
+	private function normalizeDsnInput($dsn, $connectionType, $odbcBackend) {
+		$dsn = trim((string) $dsn);
+		$connectionType = strtolower(trim((string) $connectionType));
+		if ($dsn === '') {
+			return '';
+		}
+		if ($connectionType === 'odbc') {
+			return $this->normalizeOdbcDsnInput($dsn, $odbcBackend === '' ? 'mysql' : $odbcBackend);
+		}
+		return $dsn;
+	}
+
+	private function deriveConnectionTypeFromDsn($dsn, $odbcBackend = '') {
+		$dsn = trim((string) $dsn);
+		$scheme = '';
+		if (preg_match('/^([a-zA-Z][a-zA-Z0-9_]*)\:/', $dsn, $m)) {
+			$scheme = strtolower((string) $m[1]);
+		}
+		if ($scheme === 'mysql') {
+			return 'mysql';
+		}
+		if ($scheme === 'pgsql') {
+			return 'pgsql';
+		}
+		if ($scheme === 'odbc') {
+			return 'odbc';
+		}
+		if ($dsn !== '') {
+			return 'odbc';
+		}
+		return 'mysql';
+	}
+
+	private function getDsnScheme($dsn) {
+		$dsn = trim((string) $dsn);
+		if (preg_match('/^([a-zA-Z][a-zA-Z0-9_]*)\:/', $dsn, $m)) {
+			return strtolower((string) $m[1]);
+		}
+		return '';
 	}
 
 	private function ensureGlobalSettingsDefined() {

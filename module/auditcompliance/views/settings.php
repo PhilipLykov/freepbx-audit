@@ -4,6 +4,10 @@ $settings = is_array($settings ?? null) ? $settings : array();
 $storageStatus = is_array($storageStatus ?? null) ? $storageStatus : null;
 $settingsNotice = is_array($settingsNotice ?? null) ? $settingsNotice : null;
 $csrfToken = (string) ($csrfToken ?? '');
+$showStorageStatus = $storageStatus !== null;
+if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $storageStatus['message'])) {
+	$showStorageStatus = ((string) $settingsNotice['message']) !== ((string) $storageStatus['message']);
+}
 ?>
 <style>
 .audit-settings-tabs { margin-bottom: 20px; }
@@ -26,6 +30,7 @@ $csrfToken = (string) ($csrfToken ?? '');
 	color: #6c757d;
 	margin-top: 8px;
 }
+.audit-odbc-only { display: none; }
 </style>
 
 <div class="container-fluid">
@@ -44,7 +49,7 @@ $csrfToken = (string) ($csrfToken ?? '');
 			<?php echo $esc($settingsNotice['message'] ?? ''); ?>
 		</div>
 	<?php endif; ?>
-	<?php if ($storageStatus): ?>
+	<?php if ($showStorageStatus): ?>
 		<div class="alert <?php echo !empty($storageStatus['status']) ? 'alert-info' : 'alert-warning'; ?>">
 			<?php echo $esc($storageStatus['message'] ?? ''); ?>
 			<?php if (!empty($storageStatus['driver'])): ?>
@@ -59,6 +64,17 @@ $csrfToken = (string) ($csrfToken ?? '');
 			<input type="hidden" name="keep_current_password" value="1">
 
 			<div class="form-group">
+				<label for="audit_connection_type"><?php echo _('Connection Type'); ?></label>
+				<select class="form-control" id="audit_connection_type" name="audit_connection_type">
+					<?php $connectionType = (string) ($settings['audit_connection_type'] ?? 'mysql'); ?>
+					<option value="mysql" <?php echo $connectionType === 'mysql' ? 'selected' : ''; ?>><?php echo _('Direct MySQL/MariaDB (PDO)'); ?></option>
+					<option value="pgsql" <?php echo $connectionType === 'pgsql' ? 'selected' : ''; ?>><?php echo _('Direct PostgreSQL (PDO)'); ?></option>
+					<option value="odbc" <?php echo $connectionType === 'odbc' ? 'selected' : ''; ?>><?php echo _('ODBC connection'); ?></option>
+				</select>
+				<p class="help-block"><?php echo _('Choose how this module connects to your remote audit database.'); ?></p>
+			</div>
+
+			<div class="form-group">
 				<label for="audit_db_dsn"><?php echo _('Audit DB DSN'); ?></label>
 				<input
 					type="text"
@@ -68,7 +84,7 @@ $csrfToken = (string) ($csrfToken ?? '');
 					value="<?php echo $esc($settings['audit_db_dsn'] ?? ''); ?>"
 					placeholder="mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
 				>
-				<p class="help-block"><?php echo _('Leave empty to use local FreePBX DB (development only).'); ?></p>
+				<p class="help-block" id="audit-dsn-help"><?php echo _('Use mysql:host=...;port=3306;dbname=... for direct MySQL/MariaDB.'); ?></p>
 			</div>
 
 			<div class="row">
@@ -117,16 +133,15 @@ $csrfToken = (string) ($csrfToken ?? '');
 						</div>
 					</div>
 				</div>
-				<div class="col-sm-3">
+				<div class="col-sm-3 audit-odbc-only" id="audit-odbc-backend-wrap">
 					<div class="form-group">
-						<label for="audit_db_odbc_backend"><?php echo _('ODBC Backend'); ?></label>
+						<label for="audit_db_odbc_backend"><?php echo _('ODBC target engine'); ?></label>
 						<select class="form-control" id="audit_db_odbc_backend" name="audit_db_odbc_backend">
 							<?php $odbcBackend = (string) ($settings['audit_db_odbc_backend'] ?? ''); ?>
-							<option value="" <?php echo $odbcBackend === '' ? 'selected' : ''; ?>><?php echo _('Auto / Not ODBC'); ?></option>
-							<option value="mysql" <?php echo $odbcBackend === 'mysql' ? 'selected' : ''; ?>>mysql</option>
-							<option value="pgsql" <?php echo $odbcBackend === 'pgsql' ? 'selected' : ''; ?>>pgsql</option>
+							<option value="mysql" <?php echo $odbcBackend === 'mysql' ? 'selected' : ''; ?>><?php echo _('MySQL / MariaDB'); ?></option>
+							<option value="pgsql" <?php echo $odbcBackend === 'pgsql' ? 'selected' : ''; ?>><?php echo _('PostgreSQL'); ?></option>
 						</select>
-						<p class="help-block"><?php echo _('Required when DSN starts with odbc:.'); ?></p>
+						<p class="help-block"><?php echo _('Used for SQL dialect selection when using ODBC.'); ?></p>
 					</div>
 				</div>
 				<div class="col-sm-3">
@@ -161,3 +176,45 @@ $csrfToken = (string) ($csrfToken ?? '');
 		</form>
 	</div>
 </div>
+<script type="text/javascript">
+(function() {
+	"use strict";
+	var typeEl = document.getElementById("audit_connection_type");
+	var dsnEl = document.getElementById("audit_db_dsn");
+	var helpEl = document.getElementById("audit-dsn-help");
+	var odbcWrap = document.getElementById("audit-odbc-backend-wrap");
+
+	function applyConnectionTypeUi() {
+		var t = (typeEl && typeEl.value) ? typeEl.value : "mysql";
+		if (odbcWrap) {
+			odbcWrap.style.display = (t === "odbc") ? "block" : "none";
+		}
+		if (!dsnEl || !helpEl) {
+			return;
+		}
+		if (t === "pgsql") {
+			if (!dsnEl.value) {
+				dsnEl.placeholder = "pgsql:host=audit-db.example.com;port=5432;dbname=auditcompliance;sslmode=require";
+			}
+			helpEl.textContent = "Use pgsql:host=...;port=5432;dbname=...;sslmode=require for direct PostgreSQL.";
+			return;
+		}
+		if (t === "odbc") {
+			if (!dsnEl.value) {
+				dsnEl.placeholder = "odbc:AuditDB";
+			}
+			helpEl.textContent = "Use odbc:AuditDB (or just AuditDB; it will be normalized automatically).";
+			return;
+		}
+		if (!dsnEl.value) {
+			dsnEl.placeholder = "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4";
+		}
+		helpEl.textContent = "Use mysql:host=...;port=3306;dbname=... for direct MySQL/MariaDB.";
+	}
+
+	if (typeEl) {
+		typeEl.addEventListener("change", applyConnectionTypeUi);
+	}
+	applyConnectionTypeUi();
+})();
+</script>
