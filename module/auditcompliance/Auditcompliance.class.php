@@ -735,7 +735,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'audit_session_idle_timeout_seconds' => (string) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS)
 		);
 		try {
-			$connectivityCheck = $this->testSettingsConnectionFromUi($values);
+			$connectivityCheck = $this->testConnectionWithValues($values);
 			if (empty($connectivityCheck['status'])) {
 				return $connectivityCheck;
 			}
@@ -782,8 +782,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if (!$parsed['status']) {
 			return $parsed;
 		}
-		$values = $parsed['values'];
-		if ($values['audit_db_dsn'] === '') {
+		return $this->testConnectionWithValues($parsed['values']);
+	}
+
+	private function testConnectionWithValues(array $values) {
+		$dsn = trim((string) ($values['audit_db_dsn'] ?? ''));
+		$user = (string) ($values['audit_db_user'] ?? '');
+		$password = (string) ($values['audit_db_password'] ?? '');
+		if ($dsn === '') {
 			return array('status' => true, 'message' => 'Using local FreePBX database (fallback mode).');
 		}
 
@@ -792,12 +798,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
 				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
 			);
-			$pdo = new PDO(
-				$values['audit_db_dsn'],
-				$values['audit_db_user'],
-				$values['audit_db_password'],
-				$options
-			);
+			$pdo = new PDO($dsn, $user, $password, $options);
 			$sth = $pdo->query('SELECT 1');
 			$sth->fetchColumn();
 		} catch (\Throwable $e) {
@@ -2136,6 +2137,12 @@ JSEOF;
 		if ($connectionType === '') {
 			$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
 		}
+		$odbcNameRaw = trim((string) ($input['audit_odbc_dsn_name'] ?? ''));
+		$hostRaw = trim((string) ($input['audit_db_host'] ?? ''));
+		$dbNameRaw = trim((string) ($input['audit_db_name'] ?? ''));
+		if ($connectionType !== 'odbc' && $odbcNameRaw !== '' && $hostRaw === '' && $dbNameRaw === '') {
+			$connectionType = 'odbc';
+		}
 		if (!in_array($connectionType, array('mysql', 'pgsql', 'odbc'), true)) {
 			return array('status' => false, 'message' => 'Connection type must be mysql, pgsql, or odbc');
 		}
@@ -2190,6 +2197,7 @@ JSEOF;
 		return array(
 			'status' => true,
 			'values' => array(
+				'audit_connection_type' => $connectionType,
 				'audit_db_dsn' => $this->truncate($dsn, 2048),
 				'audit_db_user' => $this->truncate($user, 256),
 				'audit_db_password' => $this->truncate((string) $password, 2048),
