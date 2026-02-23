@@ -1356,12 +1356,6 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private function handleDashboardStatsAjax() {
 		$this->clearStorageError();
-		$this->ensureAuditSchema();
-		$pdo = $this->getAuditDb();
-		$now = time();
-		$todayStart = (new \DateTime('today midnight', new \DateTimeZone('Europe/Chisinau')))->getTimestamp();
-		$last24h = $now - 86400;
-
 		$stats = array(
 			'events_today' => 0,
 			'events_total' => 0,
@@ -1375,6 +1369,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		);
 
 		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$now = time();
+			$todayStart = (new \DateTime('today midnight', new \DateTimeZone('Europe/Chisinau')))->getTimestamp();
+			$last24h = $now - 86400;
+
 			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE occurred_at_unix >= ?");
 			$sth->execute(array($todayStart));
 			$stats['events_today'] = (int) $sth->fetchColumn();
@@ -1909,6 +1909,7 @@ JSEOF;
 			return $this->auditDb;
 		}
 
+		$this->validateSupportedDsnFormat($dsn);
 		$this->validateDsnSecurity($dsn, $requireTls);
 		$options = array(
 			PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
@@ -2135,6 +2136,7 @@ JSEOF;
 		}
 
 		try {
+			$this->validateSupportedDsnFormat($dsn);
 			$this->validateDsnSecurity($dsn, $requireTls === '1');
 		} catch (\Throwable $e) {
 			return array('status' => false, 'message' => $this->truncate($e->getMessage(), 250));
@@ -2160,6 +2162,20 @@ JSEOF;
 				'audit_session_idle_timeout_seconds' => (string) $idleTimeout
 			)
 		);
+	}
+
+	private function validateSupportedDsnFormat($dsn) {
+		$dsn = trim((string) $dsn);
+		if ($dsn === '') {
+			return;
+		}
+		if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_]*:/', $dsn)) {
+			throw new \Exception('Invalid DSN format. Use a PDO DSN like mysql:..., pgsql:..., or odbc:...');
+		}
+		$scheme = strtolower((string) strstr($dsn, ':', true));
+		if (!in_array($scheme, array('mysql', 'pgsql', 'odbc'), true)) {
+			throw new \Exception('Unsupported DSN scheme "' . $scheme . '". Supported schemes: mysql, pgsql, odbc.');
+		}
 	}
 
 	private function ensureGlobalSettingsDefined() {
