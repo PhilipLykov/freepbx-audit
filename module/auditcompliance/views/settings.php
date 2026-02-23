@@ -49,7 +49,13 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 	</ul>
 
 	<?php if ($settingsNotice): ?>
-		<div class="alert <?php echo !empty($settingsNotice['status']) ? 'alert-success' : 'alert-danger'; ?>">
+		<?php
+			$noticeClass = 'alert-danger';
+			if (!empty($settingsNotice['status'])) {
+				$noticeClass = !empty($settingsNotice['warning']) ? 'alert-warning' : 'alert-success';
+			}
+		?>
+		<div class="alert <?php echo $noticeClass; ?>">
 			<?php echo $esc($settingsNotice['message'] ?? ''); ?>
 		</div>
 	<?php endif; ?>
@@ -218,10 +224,14 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 	var directHelpEl = document.getElementById("audit-direct-help");
 	var odbcWrap = document.getElementById("audit-odbc-backend-wrap");
 
-	function applyConnectionTypeUi() {
+	var odbcDsnEl = document.getElementById("audit_odbc_dsn_name");
+	var prevType = (typeEl && typeEl.value) ? typeEl.value : "mysql";
+
+	function applyConnectionTypeUi(isUserChange) {
 		var t = (typeEl && typeEl.value) ? typeEl.value : "mysql";
+		var isDirect = (t === "mysql" || t === "pgsql");
 		if (directFields) {
-			directFields.style.display = (t === "mysql" || t === "pgsql") ? "block" : "none";
+			directFields.style.display = isDirect ? "block" : "none";
 		}
 		if (odbcFields) {
 			odbcFields.style.display = (t === "odbc") ? "block" : "none";
@@ -229,18 +239,23 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 		if (odbcWrap) {
 			odbcWrap.style.display = (t === "odbc") ? "block" : "none";
 		}
+		if (isUserChange && prevType !== t) {
+			if (isDirect && odbcDsnEl) {
+				odbcDsnEl.value = "";
+			}
+			if (t === "odbc") {
+				if (hostEl) { hostEl.value = ""; }
+				if (portEl) { portEl.value = ""; }
+				if (dbNameEl) { dbNameEl.value = ""; }
+			}
+			prevType = t;
+		}
 		if (!directHelpEl) {
 			return;
 		}
 		if (t === "pgsql") {
 			if (portEl && !portEl.value) {
 				portEl.value = "5432";
-			}
-			if (hostEl && !hostEl.placeholder) {
-				hostEl.placeholder = "db.example.com";
-			}
-			if (dbNameEl && !dbNameEl.placeholder) {
-				dbNameEl.placeholder = "auditcompliance";
 			}
 			directHelpEl.textContent = "Direct PostgreSQL mode: enter Hostname, Port, and Database Name.";
 			return;
@@ -255,8 +270,8 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 	}
 
 	if (typeEl) {
-		typeEl.addEventListener("change", applyConnectionTypeUi);
+		typeEl.addEventListener("change", function() { applyConnectionTypeUi(true); });
 	}
-	applyConnectionTypeUi();
+	applyConnectionTypeUi(false);
 })();
 </script>

@@ -39,6 +39,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	);
 
 	private const GLOBAL_SETTING_MAP = array(
+		'audit_connection_type' => 'AUDITCOMPLIANCE_CONNECTION_TYPE',
 		'audit_db_dsn' => 'AUDITCOMPLIANCE_DB_DSN',
 		'audit_db_user' => 'AUDITCOMPLIANCE_DB_USER',
 		'audit_db_password' => 'AUDITCOMPLIANCE_DB_PASSWORD',
@@ -66,6 +67,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	public function install() {
 		$this->ensureGlobalSettingsDefined();
+		$this->setDefaultConfigIfMissing('audit_connection_type', 'mysql');
 		$this->setDefaultConfigIfMissing('audit_db_dsn', '');
 		$this->setDefaultConfigIfMissing('audit_db_user', '');
 		$this->setDefaultConfigIfMissing('audit_db_password', '');
@@ -657,11 +659,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	public function getSettingsSnapshot() {
 		$password = (string) $this->getConfigSafe('audit_db_password', '');
 		$odbcBackend = (string) $this->getConfigSafe('audit_db_odbc_backend', '');
-		$dsn = $this->normalizeOdbcDsnInput((string) $this->getConfigSafe('audit_db_dsn', ''), $odbcBackend);
-		$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
-		$ui = $this->extractConnectionUiValues($dsn, $connectionType);
+		$storedType = strtolower(trim((string) $this->getConfigSafe('audit_connection_type', '')));
+		$dsn = (string) $this->getConfigSafe('audit_db_dsn', '');
+
+		if (!in_array($storedType, array('mysql', 'pgsql', 'odbc'), true)) {
+			$storedType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
+		}
+		if ($storedType === 'odbc') {
+			$dsn = $this->normalizeOdbcDsnInput($dsn, $odbcBackend);
+		}
+
+		$ui = $this->extractConnectionUiValues($dsn, $storedType);
 		return array(
-			'audit_connection_type' => $connectionType,
+			'audit_connection_type' => $storedType,
 			'audit_db_dsn' => $dsn,
 			'audit_odbc_dsn_name' => $ui['odbc_dsn_name'],
 			'audit_db_host' => $ui['host'],
@@ -714,6 +724,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	/**
 	 * Validate and persist settings from the GUI.
+	 *
+	 * Settings are always persisted after input validation passes.
+	 * Connection test is performed after saving; its result is returned
+	 * as a warning but does not block persistence.
 	 */
 	public function saveSettingsFromUi(array $input) {
 		if (!$this->hasAuditAdminPermission()) {
@@ -726,6 +740,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		$values = $parsed['values'];
 		$previousModuleValues = array(
+			'audit_connection_type' => (string) $this->getConfigSafe('audit_connection_type', 'mysql'),
 			'audit_db_dsn' => (string) $this->getConfigSafe('audit_db_dsn', ''),
 			'audit_db_user' => (string) $this->getConfigSafe('audit_db_user', ''),
 			'audit_db_password' => (string) $this->getConfigSafe('audit_db_password', ''),
@@ -735,11 +750,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'audit_session_idle_timeout_seconds' => (string) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS)
 		);
 		try {
-			$connectivityCheck = $this->testConnectionWithValues($values);
-			if (empty($connectivityCheck['status'])) {
-				return $connectivityCheck;
-			}
-
+			$this->setConfig('audit_connection_type', $values['audit_connection_type']);
 			$this->setConfig('audit_db_dsn', $values['audit_db_dsn']);
 			$this->setConfig('audit_db_user', $values['audit_db_user']);
 			$this->setConfig('audit_db_password', $values['audit_db_password']);
@@ -749,6 +760,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$this->setConfig('audit_session_idle_timeout_seconds', $values['audit_session_idle_timeout_seconds']);
 
 			$this->setGlobalConfigValues(array(
+				'audit_connection_type' => $values['audit_connection_type'],
 				'audit_db_dsn' => $values['audit_db_dsn'],
 				'audit_db_user' => $values['audit_db_user'],
 				'audit_db_password' => $values['audit_db_password'],
@@ -765,10 +777,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$this->debugLog('Settings save failed', array('error' => $e->getMessage()));
 			$this->restoreModuleConfigValues($previousModuleValues);
 			$this->setGlobalConfigValues($previousModuleValues);
-			return array('status' => false, 'message' => 'Failed to save settings');
+			return array('status' => false, 'message' => 'Failed to save settings: ' . $this->truncate($e->getMessage(), 200));
 		}
 
-		return array('status' => true, 'message' => 'Settings saved successfully');
+		$connectivityCheck = $this->testConnectionWithValues($values);
+		if (empty($connectivityCheck['status'])) {
+			return array(
+				'status' => true,
+				'message' => 'Settings saved. Warning: ' . ($connectivityCheck['message'] ?? 'connection test failed'),
+				'warning' => true
+			);
+		}
+
+		return array('status' => true, 'message' => 'Settings saved and connection verified successfully.');
 	}
 
 	/**
@@ -1910,8 +1931,13 @@ JSEOF;
 		$requireTls = ($this->getConfigSafe('audit_db_require_tls', '1')) === '1';
 		$requireExternal = ($this->getConfigSafe('audit_require_external_db', '1')) === '1';
 		$odbcBackend = strtolower(trim((string) ($this->getConfigSafe('audit_db_odbc_backend', ''))));
-		$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
-		$dsn = $this->normalizeDsnInput($dsn, $connectionType, $odbcBackend);
+		$storedType = strtolower(trim((string) ($this->getConfigSafe('audit_connection_type', ''))));
+		$connectionType = in_array($storedType, array('mysql', 'pgsql', 'odbc'), true)
+			? $storedType
+			: $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
+		if ($connectionType === 'odbc') {
+			$dsn = $this->normalizeOdbcDsnInput($dsn, $odbcBackend);
+		}
 
 		if ($dsn === '') {
 			if ($requireExternal) {
@@ -2133,15 +2159,10 @@ JSEOF;
 		$requireTls = !empty($input['audit_db_require_tls']) ? '1' : '0';
 		$requireExternal = !empty($input['audit_require_external_db']) ? '1' : '0';
 		$odbcBackend = strtolower(trim((string) ($input['audit_db_odbc_backend'] ?? '')));
-		$connectionType = strtolower(trim((string) ($input['audit_connection_type'] ?? '')));
+		$connectionTypeExplicit = strtolower(trim((string) ($input['audit_connection_type'] ?? '')));
+		$connectionType = $connectionTypeExplicit;
 		if ($connectionType === '') {
 			$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
-		}
-		$odbcNameRaw = trim((string) ($input['audit_odbc_dsn_name'] ?? ''));
-		$hostRaw = trim((string) ($input['audit_db_host'] ?? ''));
-		$dbNameRaw = trim((string) ($input['audit_db_name'] ?? ''));
-		if ($connectionType !== 'odbc' && $odbcNameRaw !== '' && $hostRaw === '' && $dbNameRaw === '') {
-			$connectionType = 'odbc';
 		}
 		if (!in_array($connectionType, array('mysql', 'pgsql', 'odbc'), true)) {
 			return array('status' => false, 'message' => 'Connection type must be mysql, pgsql, or odbc');
@@ -2362,6 +2383,17 @@ JSEOF;
 		}
 
 		$settings = array(
+			'AUDITCOMPLIANCE_CONNECTION_TYPE' => array(
+				'value' => 'mysql',
+				'defaultval' => 'mysql',
+				'type' => CONF_TYPE_TEXT,
+				'name' => 'Audit Compliance Connection Type',
+				'description' => 'Database connection type for audit storage: mysql, pgsql, or odbc.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => false,
+				'hidden' => false
+			),
 			'AUDITCOMPLIANCE_DB_DSN' => array(
 				'value' => '',
 				'defaultval' => '',

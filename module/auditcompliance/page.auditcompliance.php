@@ -72,9 +72,24 @@ switch ($view) {
 			echo '<div class="alert alert-danger">' . _('Access denied. Settings management requires administrator privileges.') . '</div>';
 			break;
 		}
+		$settingsForForm = FreePBX::Auditcompliance()->getSettingsSnapshot();
+		if ($settingsNotice !== null && strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST') {
+			$settingsForForm = array_merge($settingsForForm, array(
+				'audit_connection_type' => (string) ($_POST['audit_connection_type'] ?? $settingsForForm['audit_connection_type']),
+				'audit_db_host' => (string) ($_POST['audit_db_host'] ?? ''),
+				'audit_db_port' => (string) ($_POST['audit_db_port'] ?? ''),
+				'audit_db_name' => (string) ($_POST['audit_db_name'] ?? ''),
+				'audit_odbc_dsn_name' => (string) ($_POST['audit_odbc_dsn_name'] ?? ''),
+				'audit_db_user' => (string) ($_POST['audit_db_user'] ?? ''),
+				'audit_db_require_tls' => !empty($_POST['audit_db_require_tls']) ? '1' : '0',
+				'audit_db_odbc_backend' => (string) ($_POST['audit_db_odbc_backend'] ?? ''),
+				'audit_require_external_db' => !empty($_POST['audit_require_external_db']) ? '1' : '0',
+				'audit_session_idle_timeout_seconds' => (string) ($_POST['audit_session_idle_timeout_seconds'] ?? '1800')
+			));
+		}
 		echo load_view(__DIR__ . '/views/settings.php', array(
 			'request' => $request,
-			'settings' => FreePBX::Auditcompliance()->getSettingsSnapshot(),
+			'settings' => $settingsForForm,
 			'storageStatus' => FreePBX::Auditcompliance()->getAuditStorageStatus(),
 			'settingsNotice' => $settingsNotice,
 			'csrfToken' => (string) ($_SESSION[$csrfSessionKey] ?? '')
