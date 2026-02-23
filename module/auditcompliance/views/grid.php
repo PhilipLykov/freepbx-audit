@@ -6,7 +6,7 @@ $timelineReadError = $timelineReadError ?? '';
 $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
 <style>
-.audit-search-tabs { margin-bottom: 20px; }
+.audit-tabs { margin-bottom: 20px; }
 
 .audit-timeline-filter {
 	display: flex;
@@ -252,7 +252,7 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 <div class="container-fluid">
 	<h1><?php echo _('Audit Compliance'); ?></h1>
 
-	<ul class="nav nav-tabs audit-search-tabs" style="margin-bottom: 20px;">
+	<ul class="nav nav-tabs audit-tabs">
 		<li><a href="?display=auditcompliance&view=dashboard"><i class="fa fa-tachometer"></i> <?php echo _('Dashboard'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li class="active"><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>

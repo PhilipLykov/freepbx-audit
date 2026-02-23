@@ -6,7 +6,7 @@ $modules = $discoveryData['modules'] ?? array();
 $summary = $discoveryData['summary'] ?? array();
 ?>
 <style>
-.audit-search-tabs { margin-bottom: 20px; }
+.audit-tabs { margin-bottom: 20px; }
 
 .audit-discovery-stats {
 	display: flex;
@@ -121,7 +121,7 @@ $summary = $discoveryData['summary'] ?? array();
 <div class="container-fluid">
 	<h1><?php echo _('Audit Compliance'); ?></h1>
 
-	<ul class="nav nav-tabs audit-search-tabs">
+	<ul class="nav nav-tabs audit-tabs">
 		<li><a href="?display=auditcompliance&view=dashboard"><i class="fa fa-tachometer"></i> <?php echo _('Dashboard'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>

@@ -2,23 +2,18 @@
 $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
 <style>
-.audit-dash-tabs { margin-bottom: 0; }
+.audit-tabs { margin-bottom: 0; }
 .audit-dash-hero {
 	background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
 	color: #fff;
-	padding: 28px 24px 20px;
+	padding: 14px 24px;
 	border-radius: 6px 6px 0 0;
 	margin-bottom: 0;
 }
-.audit-dash-hero h1 {
-	margin: 0 0 4px;
-	font-size: 22px;
-	font-weight: 600;
-	color: #fff;
-}
 .audit-dash-hero .subtitle {
 	font-size: 13px;
-	opacity: 0.85;
+	font-weight: 500;
+	opacity: 0.9;
 }
 .audit-kpi-row {
 	display: flex;
@@ -262,7 +257,7 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 <div class="container-fluid">
 	<h1><?php echo _('Audit Compliance'); ?></h1>
 
-	<ul class="nav nav-tabs audit-dash-tabs">
+	<ul class="nav nav-tabs audit-tabs">
 		<li class="active"><a href="?display=auditcompliance&view=dashboard"><i class="fa fa-tachometer"></i> <?php echo _('Dashboard'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>
@@ -271,8 +266,7 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 	</ul>
 
 	<div class="audit-dash-hero">
-		<h1><i class="fa fa-shield" style="margin-right: 8px;"></i><?php echo _('Audit Compliance'); ?></h1>
-		<span class="subtitle"><?php echo _('Administrator activity monitoring and compliance log'); ?></span>
+		<span class="subtitle"><i class="fa fa-shield" style="margin-right: 6px;"></i><?php echo _('Administrator activity monitoring and compliance log'); ?></span>
 	</div>
 
 	<div class="audit-kpi-row" id="audit-kpi-row">

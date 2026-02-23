@@ -2159,8 +2159,7 @@ JSEOF;
 		$requireTls = !empty($input['audit_db_require_tls']) ? '1' : '0';
 		$requireExternal = !empty($input['audit_require_external_db']) ? '1' : '0';
 		$odbcBackend = strtolower(trim((string) ($input['audit_db_odbc_backend'] ?? '')));
-		$connectionTypeExplicit = strtolower(trim((string) ($input['audit_connection_type'] ?? '')));
-		$connectionType = $connectionTypeExplicit;
+		$connectionType = strtolower(trim((string) ($input['audit_connection_type'] ?? '')));
 		if ($connectionType === '') {
 			$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
 		}
@@ -2251,18 +2250,6 @@ JSEOF;
 		}
 		if (strpos($dsn, ':') === false) {
 			return 'odbc:' . $dsn;
-		}
-		return $dsn;
-	}
-
-	private function normalizeDsnInput($dsn, $connectionType, $odbcBackend) {
-		$dsn = trim((string) $dsn);
-		$connectionType = strtolower(trim((string) $connectionType));
-		if ($dsn === '') {
-			return '';
-		}
-		if ($connectionType === 'odbc') {
-			return $this->normalizeOdbcDsnInput($dsn, $odbcBackend === '' ? 'mysql' : $odbcBackend);
 		}
 		return $dsn;
 	}
