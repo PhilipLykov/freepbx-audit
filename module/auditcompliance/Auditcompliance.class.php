@@ -659,9 +659,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$odbcBackend = (string) $this->getConfigSafe('audit_db_odbc_backend', '');
 		$dsn = $this->normalizeOdbcDsnInput((string) $this->getConfigSafe('audit_db_dsn', ''), $odbcBackend);
 		$connectionType = $this->deriveConnectionTypeFromDsn($dsn, $odbcBackend);
+		$ui = $this->extractConnectionUiValues($dsn, $connectionType);
 		return array(
 			'audit_connection_type' => $connectionType,
 			'audit_db_dsn' => $dsn,
+			'audit_odbc_dsn_name' => $ui['odbc_dsn_name'],
+			'audit_db_host' => $ui['host'],
+			'audit_db_port' => $ui['port'],
+			'audit_db_name' => $ui['db_name'],
 			'audit_db_user' => (string) $this->getConfigSafe('audit_db_user', ''),
 			'audit_db_password' => '',
 			'audit_db_password_set' => ($password !== ''),
@@ -2134,7 +2139,11 @@ JSEOF;
 		if (!in_array($connectionType, array('mysql', 'pgsql', 'odbc'), true)) {
 			return array('status' => false, 'message' => 'Connection type must be mysql, pgsql, or odbc');
 		}
-		$dsn = $this->normalizeDsnInput($dsn, $connectionType, $odbcBackend);
+		try {
+			$dsn = $this->buildConnectionDsnFromInput($input, $connectionType, $requireExternal === '1', $requireTls === '1', $odbcBackend, $dsn);
+		} catch (\Throwable $e) {
+			return array('status' => false, 'message' => $this->truncate($e->getMessage(), 250));
+		}
 		$dsnScheme = $this->getDsnScheme($dsn);
 		$idleTimeout = (int) ($input['audit_session_idle_timeout_seconds'] ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
 
@@ -2229,6 +2238,46 @@ JSEOF;
 		return $dsn;
 	}
 
+	private function buildConnectionDsnFromInput(array $input, $connectionType, $requireExternal, $requireTls, $odbcBackend, $fallbackDsn = '') {
+		$connectionType = strtolower(trim((string) $connectionType));
+		if ($connectionType === 'odbc') {
+			$odbcName = trim((string) ($input['audit_odbc_dsn_name'] ?? ''));
+			if ($odbcName === '') {
+				$odbcName = trim((string) $fallbackDsn);
+			}
+			return $this->normalizeOdbcDsnInput($odbcName, $odbcBackend);
+		}
+
+		$host = trim((string) ($input['audit_db_host'] ?? ''));
+		$dbName = trim((string) ($input['audit_db_name'] ?? ''));
+		$portInput = trim((string) ($input['audit_db_port'] ?? ''));
+		$port = ctype_digit($portInput) ? (int) $portInput : 0;
+		if ($port <= 0) {
+			$port = $connectionType === 'pgsql' ? 5432 : 3306;
+		}
+
+		if ($host === '' || $dbName === '') {
+			if ($requireExternal) {
+				throw new \Exception('For direct database connection, Hostname and DB name are required.');
+			}
+			return '';
+		}
+
+		if ($connectionType === 'pgsql') {
+			$dsn = 'pgsql:host=' . $host . ';port=' . $port . ';dbname=' . $dbName;
+			if ($requireTls) {
+				$dsn .= ';sslmode=require';
+			}
+			return $dsn;
+		}
+
+		$dsn = 'mysql:host=' . $host . ';port=' . $port . ';dbname=' . $dbName . ';charset=utf8mb4';
+		if ($requireTls) {
+			$dsn .= ';ssl=true';
+		}
+		return $dsn;
+	}
+
 	private function deriveConnectionTypeFromDsn($dsn, $odbcBackend = '') {
 		$dsn = trim((string) $dsn);
 		$scheme = '';
@@ -2248,6 +2297,47 @@ JSEOF;
 			return 'odbc';
 		}
 		return 'mysql';
+	}
+
+	private function extractConnectionUiValues($dsn, $connectionType) {
+		$out = array(
+			'odbc_dsn_name' => '',
+			'host' => '',
+			'port' => '',
+			'db_name' => ''
+		);
+		$connectionType = strtolower(trim((string) $connectionType));
+		$dsn = trim((string) $dsn);
+		if ($connectionType === 'odbc') {
+			$out['odbc_dsn_name'] = preg_replace('/^odbc\:/i', '', $dsn);
+			return $out;
+		}
+
+		$pairs = $this->parseDsnPairs($dsn);
+		$out['host'] = (string) ($pairs['host'] ?? '');
+		$out['port'] = (string) ($pairs['port'] ?? '');
+		$out['db_name'] = (string) ($pairs['dbname'] ?? '');
+		return $out;
+	}
+
+	private function parseDsnPairs($dsn) {
+		$pairs = array();
+		$dsn = trim((string) $dsn);
+		$parts = explode(':', $dsn, 2);
+		if (count($parts) !== 2) {
+			return $pairs;
+		}
+		$tail = (string) $parts[1];
+		foreach (explode(';', $tail) as $segment) {
+			$segment = trim((string) $segment);
+			if ($segment === '' || strpos($segment, '=') === false) {
+				continue;
+			}
+			list($k, $v) = explode('=', $segment, 2);
+			$key = strtolower(trim((string) $k));
+			$pairs[$key] = trim((string) $v);
+		}
+		return $pairs;
 	}
 
 	private function getDsnScheme($dsn) {

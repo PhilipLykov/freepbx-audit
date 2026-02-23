@@ -33,6 +33,7 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 	color: #6c757d;
 	margin-top: 8px;
 }
+.audit-direct-only,
 .audit-odbc-only { display: none; }
 </style>
 
@@ -77,17 +78,43 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 				<p class="help-block"><?php echo _('Choose how this module connects to your remote audit database.'); ?></p>
 			</div>
 
-			<div class="form-group">
-				<label for="audit_db_dsn"><?php echo _('Audit DB DSN'); ?></label>
-				<input
-					type="text"
-					class="form-control"
-					id="audit_db_dsn"
-					name="audit_db_dsn"
-					value="<?php echo $esc($settings['audit_db_dsn'] ?? ''); ?>"
-					placeholder="mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
-				>
-				<p class="help-block" id="audit-dsn-help"><?php echo _('Use mysql:host=...;port=3306;dbname=... for direct MySQL/MariaDB.'); ?></p>
+			<div id="audit-direct-fields" class="audit-direct-only">
+				<div class="row">
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="audit_db_host"><?php echo _('Hostname'); ?></label>
+							<input type="text" class="form-control" id="audit_db_host" name="audit_db_host" value="<?php echo $esc($settings['audit_db_host'] ?? ''); ?>" placeholder="db.example.com">
+						</div>
+					</div>
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="audit_db_port"><?php echo _('Port'); ?></label>
+							<input type="number" class="form-control" id="audit_db_port" name="audit_db_port" value="<?php echo $esc($settings['audit_db_port'] ?? ''); ?>" min="1" max="65535" step="1">
+						</div>
+					</div>
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="audit_db_name"><?php echo _('Database Name'); ?></label>
+							<input type="text" class="form-control" id="audit_db_name" name="audit_db_name" value="<?php echo $esc($settings['audit_db_name'] ?? ''); ?>" placeholder="auditcompliance">
+						</div>
+					</div>
+				</div>
+				<p class="help-block" id="audit-direct-help"><?php echo _('Direct connection uses native PDO driver for selected database engine.'); ?></p>
+			</div>
+
+			<div id="audit-odbc-fields" class="audit-odbc-only">
+				<div class="form-group">
+					<label for="audit_odbc_dsn_name"><?php echo _('ODBC DSN Name'); ?></label>
+					<input
+						type="text"
+						class="form-control"
+						id="audit_odbc_dsn_name"
+						name="audit_odbc_dsn_name"
+						value="<?php echo $esc($settings['audit_odbc_dsn_name'] ?? ''); ?>"
+						placeholder="AuditDB"
+					>
+					<p class="help-block"><?php echo _('Use DSN name from /etc/odbc.ini (example: AuditDB).'); ?></p>
+				</div>
 			</div>
 
 			<div class="row">
@@ -183,36 +210,48 @@ if ($showStorageStatus && $settingsNotice && isset($settingsNotice['message'], $
 (function() {
 	"use strict";
 	var typeEl = document.getElementById("audit_connection_type");
-	var dsnEl = document.getElementById("audit_db_dsn");
-	var helpEl = document.getElementById("audit-dsn-help");
+	var hostEl = document.getElementById("audit_db_host");
+	var portEl = document.getElementById("audit_db_port");
+	var dbNameEl = document.getElementById("audit_db_name");
+	var directFields = document.getElementById("audit-direct-fields");
+	var odbcFields = document.getElementById("audit-odbc-fields");
+	var directHelpEl = document.getElementById("audit-direct-help");
 	var odbcWrap = document.getElementById("audit-odbc-backend-wrap");
 
 	function applyConnectionTypeUi() {
 		var t = (typeEl && typeEl.value) ? typeEl.value : "mysql";
+		if (directFields) {
+			directFields.style.display = (t === "mysql" || t === "pgsql") ? "block" : "none";
+		}
+		if (odbcFields) {
+			odbcFields.style.display = (t === "odbc") ? "block" : "none";
+		}
 		if (odbcWrap) {
 			odbcWrap.style.display = (t === "odbc") ? "block" : "none";
 		}
-		if (!dsnEl || !helpEl) {
+		if (!directHelpEl) {
 			return;
 		}
 		if (t === "pgsql") {
-			if (!dsnEl.value) {
-				dsnEl.placeholder = "pgsql:host=audit-db.example.com;port=5432;dbname=auditcompliance;sslmode=require";
+			if (portEl && !portEl.value) {
+				portEl.value = "5432";
 			}
-			helpEl.textContent = "Use pgsql:host=...;port=5432;dbname=...;sslmode=require for direct PostgreSQL.";
+			if (hostEl && !hostEl.placeholder) {
+				hostEl.placeholder = "db.example.com";
+			}
+			if (dbNameEl && !dbNameEl.placeholder) {
+				dbNameEl.placeholder = "auditcompliance";
+			}
+			directHelpEl.textContent = "Direct PostgreSQL mode: enter Hostname, Port, and Database Name.";
 			return;
 		}
 		if (t === "odbc") {
-			if (!dsnEl.value) {
-				dsnEl.placeholder = "odbc:AuditDB";
-			}
-			helpEl.textContent = "Use odbc:AuditDB (or just AuditDB; it will be normalized automatically).";
 			return;
 		}
-		if (!dsnEl.value) {
-			dsnEl.placeholder = "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4";
+		if (portEl && !portEl.value) {
+			portEl.value = "3306";
 		}
-		helpEl.textContent = "Use mysql:host=...;port=3306;dbname=... for direct MySQL/MariaDB.";
+		directHelpEl.textContent = "Direct MySQL/MariaDB mode: enter Hostname, Port, and Database Name.";
 	}
 
 	if (typeEl) {
