@@ -38,12 +38,23 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'cel' => 'cel_data_access'
 	);
 
+	private const GLOBAL_SETTING_MAP = array(
+		'audit_db_dsn' => 'AUDITCOMPLIANCE_DB_DSN',
+		'audit_db_user' => 'AUDITCOMPLIANCE_DB_USER',
+		'audit_db_password' => 'AUDITCOMPLIANCE_DB_PASSWORD',
+		'audit_db_require_tls' => 'AUDITCOMPLIANCE_DB_REQUIRE_TLS',
+		'audit_db_odbc_backend' => 'AUDITCOMPLIANCE_DB_ODBC_BACKEND',
+		'audit_require_external_db' => 'AUDITCOMPLIANCE_REQUIRE_EXTERNAL_DB',
+		'audit_session_idle_timeout_seconds' => 'AUDITCOMPLIANCE_SESSION_IDLE_TIMEOUT_SECONDS'
+	);
+
 	private $FreePBX;
 	private $db;
 	private $auditDb = null;
 	private $schemaReady = false;
 	private $auditScriptsInjected = false;
 	private $resolvedDriver = null;
+	private $lastStorageErrorMessage = '';
 
 	public function __construct($freepbx = null) {
 		if ($freepbx === null) {
@@ -54,11 +65,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	}
 
 	public function install() {
+		$this->ensureGlobalSettingsDefined();
 		$this->setDefaultConfigIfMissing('audit_db_dsn', '');
 		$this->setDefaultConfigIfMissing('audit_db_user', '');
 		$this->setDefaultConfigIfMissing('audit_db_password', '');
 		$this->setDefaultConfigIfMissing('audit_db_require_tls', '1');
 		$this->setDefaultConfigIfMissing('audit_db_odbc_backend', '');
+		$this->setDefaultConfigIfMissing('audit_require_external_db', '1');
 		$this->setDefaultConfigIfMissing('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS);
 
 		try {
@@ -638,6 +651,154 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		return false;
 	}
 
+	/**
+	 * Returns current DB-related settings for the settings UI.
+	 */
+	public function getSettingsSnapshot() {
+		$password = (string) $this->getConfigSafe('audit_db_password', '');
+		return array(
+			'audit_db_dsn' => (string) $this->getConfigSafe('audit_db_dsn', ''),
+			'audit_db_user' => (string) $this->getConfigSafe('audit_db_user', ''),
+			'audit_db_password' => '',
+			'audit_db_password_set' => ($password !== ''),
+			'audit_db_require_tls' => ((string) $this->getConfigSafe('audit_db_require_tls', '1') === '1') ? '1' : '0',
+			'audit_db_odbc_backend' => (string) $this->getConfigSafe('audit_db_odbc_backend', ''),
+			'audit_require_external_db' => ((string) $this->getConfigSafe('audit_require_external_db', '1') === '1') ? '1' : '0',
+			'audit_session_idle_timeout_seconds' => (string) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS)
+		);
+	}
+
+	public function getAuditStorageStatus() {
+		$dsn = trim((string) $this->getConfigSafe('audit_db_dsn', ''));
+		$requireExternal = ($this->getConfigSafe('audit_require_external_db', '1') === '1');
+		if ($dsn === '' && $requireExternal) {
+			return array(
+				'status' => false,
+				'message' => 'External audit DB is required, but DSN is not configured.',
+				'driver' => '',
+				'remote' => true
+			);
+		}
+
+		try {
+			$pdo = $this->getAuditDb();
+			$this->ensureAuditSchema();
+			return array(
+				'status' => true,
+				'message' => ($pdo === $this->db) ? 'Connected to local FreePBX database.' : 'Connected to remote audit database.',
+				'driver' => (string) $this->getDriverName($pdo),
+				'remote' => ($pdo !== $this->db)
+			);
+		} catch (\Throwable $e) {
+			return array(
+				'status' => false,
+				'message' => $this->truncate($e->getMessage(), 250),
+				'driver' => '',
+				'remote' => false
+			);
+		}
+	}
+
+	public function canManageSettings() {
+		return $this->hasAuditAdminPermission();
+	}
+
+	/**
+	 * Validate and persist settings from the GUI.
+	 */
+	public function saveSettingsFromUi(array $input) {
+		if (!$this->hasAuditAdminPermission()) {
+			return array('status' => false, 'message' => 'Access denied');
+		}
+		$parsed = $this->parseSettingsInput($input, true);
+		if (!$parsed['status']) {
+			return $parsed;
+		}
+
+		$values = $parsed['values'];
+		$previousModuleValues = array(
+			'audit_db_dsn' => (string) $this->getConfigSafe('audit_db_dsn', ''),
+			'audit_db_user' => (string) $this->getConfigSafe('audit_db_user', ''),
+			'audit_db_password' => (string) $this->getConfigSafe('audit_db_password', ''),
+			'audit_db_require_tls' => ((string) $this->getConfigSafe('audit_db_require_tls', '1') === '1') ? '1' : '0',
+			'audit_db_odbc_backend' => (string) $this->getConfigSafe('audit_db_odbc_backend', ''),
+			'audit_require_external_db' => ((string) $this->getConfigSafe('audit_require_external_db', '1') === '1') ? '1' : '0',
+			'audit_session_idle_timeout_seconds' => (string) $this->getConfigSafe('audit_session_idle_timeout_seconds', (string) self::SESSION_IDLE_TIMEOUT_SECONDS)
+		);
+		try {
+			$connectivityCheck = $this->testSettingsConnectionFromUi($values);
+			if (empty($connectivityCheck['status'])) {
+				return $connectivityCheck;
+			}
+
+			$this->setConfig('audit_db_dsn', $values['audit_db_dsn']);
+			$this->setConfig('audit_db_user', $values['audit_db_user']);
+			$this->setConfig('audit_db_password', $values['audit_db_password']);
+			$this->setConfig('audit_db_require_tls', $values['audit_db_require_tls']);
+			$this->setConfig('audit_db_odbc_backend', $values['audit_db_odbc_backend']);
+			$this->setConfig('audit_require_external_db', $values['audit_require_external_db']);
+			$this->setConfig('audit_session_idle_timeout_seconds', $values['audit_session_idle_timeout_seconds']);
+
+			$this->setGlobalConfigValues(array(
+				'audit_db_dsn' => $values['audit_db_dsn'],
+				'audit_db_user' => $values['audit_db_user'],
+				'audit_db_password' => $values['audit_db_password'],
+				'audit_db_require_tls' => $values['audit_db_require_tls'],
+				'audit_db_odbc_backend' => $values['audit_db_odbc_backend'],
+				'audit_require_external_db' => $values['audit_require_external_db'],
+				'audit_session_idle_timeout_seconds' => $values['audit_session_idle_timeout_seconds']
+			));
+
+			$this->auditDb = null;
+			$this->resolvedDriver = null;
+			$this->schemaReady = false;
+		} catch (\Throwable $e) {
+			$this->debugLog('Settings save failed', array('error' => $e->getMessage()));
+			$this->restoreModuleConfigValues($previousModuleValues);
+			$this->setGlobalConfigValues($previousModuleValues);
+			return array('status' => false, 'message' => 'Failed to save settings');
+		}
+
+		return array('status' => true, 'message' => 'Settings saved successfully');
+	}
+
+	/**
+	 * Validate connection settings without persisting.
+	 */
+	public function testSettingsConnectionFromUi(array $input) {
+		if (!$this->hasAuditAdminPermission()) {
+			return array('status' => false, 'message' => 'Access denied');
+		}
+		$parsed = $this->parseSettingsInput($input, false);
+		if (!$parsed['status']) {
+			return $parsed;
+		}
+		$values = $parsed['values'];
+		if ($values['audit_db_dsn'] === '') {
+			return array('status' => true, 'message' => 'Using local FreePBX database (fallback mode).');
+		}
+
+		try {
+			$options = array(
+				PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+				PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+			);
+			$pdo = new PDO(
+				$values['audit_db_dsn'],
+				$values['audit_db_user'],
+				$values['audit_db_password'],
+				$options
+			);
+			$sth = $pdo->query('SELECT 1');
+			$sth->fetchColumn();
+		} catch (\Throwable $e) {
+			$this->debugLog('Settings test connection failed', array('error' => $e->getMessage()));
+			return array('status' => false, 'message' => 'Connection test failed: ' . $this->truncate($e->getMessage(), 250));
+		}
+
+		return array('status' => true, 'message' => 'Connection successful');
+	}
+
 	// ----------------------------------------------------------------
 	// Auth boundary event writers (immutable, append-only)
 	// ----------------------------------------------------------------
@@ -699,63 +860,77 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	// ----------------------------------------------------------------
 
 	public function getRecentSessionTimeline($limit = 25, $offset = 0, $actor = '') {
-		$this->ensureAuditSchema();
-		$pdo = $this->getAuditDb();
-		$limit = max(1, min(200, (int) $limit));
-		$offset = max(0, (int) $offset);
-		$actor = trim((string) $actor);
+		$this->clearStorageError();
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$limit = max(1, min(200, (int) $limit));
+			$offset = max(0, (int) $offset);
+			$actor = trim((string) $actor);
 
-		$sql = "SELECT session_id, actor, login_at_unix, login_at_utc, login_at_local, end_at_unix, end_at_utc, end_at_local, end_reason, source_ip, user_agent, event_count
-			FROM audit_sessions";
-		$params = array();
-		if ($actor !== '') {
-			$sql .= " WHERE actor = ?";
-			$params[] = $actor;
-		}
-		$sql .= " ORDER BY login_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
+			$sql = "SELECT session_id, actor, login_at_unix, login_at_utc, login_at_local, end_at_unix, end_at_utc, end_at_local, end_reason, source_ip, user_agent, event_count
+				FROM audit_sessions";
+			$params = array();
+			if ($actor !== '') {
+				$sql .= " WHERE actor = ?";
+				$params[] = $actor;
+			}
+			$sql .= " ORDER BY login_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
-		$sth = $pdo->prepare($sql);
-		$sth->execute($params);
-		$sessions = $sth->fetchAll(PDO::FETCH_ASSOC);
-		if (empty($sessions)) {
+			$sth = $pdo->prepare($sql);
+			$sth->execute($params);
+			$sessions = $sth->fetchAll(PDO::FETCH_ASSOC);
+			if (empty($sessions)) {
+				return array();
+			}
+
+			$sessionIds = array_column($sessions, 'session_id');
+			$allEvents = $this->getSessionEventsBatch($sessionIds);
+
+			$timeline = array();
+			foreach ($sessions as $session) {
+				$sid = (string) $session['session_id'];
+				$timeline[] = array(
+					'session' => $session,
+					'events' => $allEvents[$sid] ?? array()
+				);
+			}
+			return $timeline;
+		} catch (\Throwable $e) {
+			$this->setStorageError('Timeline read failed: ' . $e->getMessage());
+			$this->debugLog('Timeline read failed', array('error' => $e->getMessage()));
 			return array();
 		}
-
-		$sessionIds = array_column($sessions, 'session_id');
-		$allEvents = $this->getSessionEventsBatch($sessionIds);
-
-		$timeline = array();
-		foreach ($sessions as $session) {
-			$sid = (string) $session['session_id'];
-			$timeline[] = array(
-				'session' => $session,
-				'events' => $allEvents[$sid] ?? array()
-			);
-		}
-		return $timeline;
 	}
 
 	public function getRecentAuthFailures($limit = 25, $offset = 0, $actor = '') {
-		$this->ensureAuditSchema();
-		$pdo = $this->getAuditDb();
-		$limit = max(1, min(200, (int) $limit));
-		$offset = max(0, (int) $offset);
-		$actor = trim((string) $actor);
+		$this->clearStorageError();
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$limit = max(1, min(200, (int) $limit));
+			$offset = max(0, (int) $offset);
+			$actor = trim((string) $actor);
 
-		$sql = "SELECT event_id, session_id, channel, module_name, action, outcome, actor, source_ip,
-			occurred_at_unix, occurred_at_utc, occurred_at_local
-			FROM audit_events
-			WHERE session_phase = ? AND outcome = ?";
-		$params = array('failure', 'failure');
-		if ($actor !== '') {
-			$sql .= " AND actor = ?";
-			$params[] = $actor;
+			$sql = "SELECT event_id, session_id, channel, module_name, action, outcome, actor, source_ip,
+				occurred_at_unix, occurred_at_utc, occurred_at_local
+				FROM audit_events
+				WHERE session_phase = ? AND outcome = ?";
+			$params = array('failure', 'failure');
+			if ($actor !== '') {
+				$sql .= " AND actor = ?";
+				$params[] = $actor;
+			}
+			$sql .= " ORDER BY occurred_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
+
+			$sth = $pdo->prepare($sql);
+			$sth->execute($params);
+			return $sth->fetchAll(PDO::FETCH_ASSOC);
+		} catch (\Throwable $e) {
+			$this->setStorageError('Auth failure read failed: ' . $e->getMessage());
+			$this->debugLog('Auth failure read failed', array('error' => $e->getMessage()));
+			return array();
 		}
-		$sql .= " ORDER BY occurred_at_unix DESC LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
-
-		$sth = $pdo->prepare($sql);
-		$sth->execute($params);
-		return $sth->fetchAll(PDO::FETCH_ASSOC);
 	}
 
 	/**
@@ -763,14 +938,16 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 * All filtering uses prepared statements. Sort field is allowlisted.
 	 */
 	public function searchAuditEvents(array $filters, $limit = 50, $offset = 0, $isExport = false) {
-		$this->ensureAuditSchema();
-		$pdo = $this->getAuditDb();
 		$maxLimit = $isExport ? 5000 : 200;
 		$limit = max(1, min($maxLimit, (int) $limit));
 		$offset = max(0, (int) $offset);
+		$this->clearStorageError();
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
 
-		$where = array();
-		$params = array();
+			$where = array();
+			$params = array();
 
 		if (!empty($filters['actor'])) {
 			$where[] = "e.actor = ?";
@@ -837,20 +1014,26 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 		$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
-		$sth = $pdo->prepare($sql);
-		$sth->execute($params);
-		$rows = $sth->fetchAll(\PDO::FETCH_ASSOC);
+			$sth = $pdo->prepare($sql);
+			$sth->execute($params);
+			$rows = $sth->fetchAll(\PDO::FETCH_ASSOC);
 
-		$countSql = "SELECT COUNT(*) FROM audit_events e";
-		if (!empty($where)) {
-			$countSql .= " WHERE " . implode(" AND ", $where);
+			$countSql = "SELECT COUNT(*) FROM audit_events e";
+			if (!empty($where)) {
+				$countSql .= " WHERE " . implode(" AND ", $where);
+			}
+			$countParams = $params;
+			$csth = $pdo->prepare($countSql);
+			$csth->execute($countParams);
+			$total = (int) $csth->fetchColumn();
+
+			return array('rows' => $rows, 'total' => $total, 'limit' => $limit, 'offset' => $offset);
+		} catch (\Throwable $e) {
+			$errorMessage = 'Search query failed: ' . $e->getMessage();
+			$this->setStorageError($errorMessage);
+			$this->debugLog('Search query failed', array('error' => $e->getMessage()));
+			return array('rows' => array(), 'total' => 0, 'limit' => $limit, 'offset' => $offset, 'error' => $this->truncate($errorMessage, 250));
 		}
-		$countParams = $params;
-		$csth = $pdo->prepare($countSql);
-		$csth->execute($countParams);
-		$total = (int) $csth->fetchColumn();
-
-		return array('rows' => $rows, 'total' => $total, 'limit' => $limit, 'offset' => $offset);
 	}
 
 	/**
@@ -861,12 +1044,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if (!in_array($column, $allowed, true)) {
 			return array();
 		}
-		$this->ensureAuditSchema();
-		$pdo = $this->getAuditDb();
-		$sql = "SELECT DISTINCT " . $column . " FROM audit_events ORDER BY " . $column . " ASC LIMIT 500";
-		$sth = $pdo->prepare($sql);
-		$sth->execute();
-		return $sth->fetchAll(\PDO::FETCH_COLUMN);
+		$this->clearStorageError();
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$sql = "SELECT DISTINCT " . $column . " FROM audit_events ORDER BY " . $column . " ASC LIMIT 500";
+			$sth = $pdo->prepare($sql);
+			$sth->execute();
+			return $sth->fetchAll(\PDO::FETCH_COLUMN);
+		} catch (\Throwable $e) {
+			$this->setStorageError('Filter values read failed: ' . $e->getMessage());
+			$this->debugLog('Filter values read failed', array('error' => $e->getMessage()));
+			return array();
+		}
 	}
 
 	// ----------------------------------------------------------------
@@ -1157,10 +1347,15 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private function handleFilterValuesAjax() {
 		$column = trim((string) ($_REQUEST['column'] ?? ''));
-		return array('values' => $this->getDistinctFilterValues($column));
+		$values = $this->getDistinctFilterValues($column);
+		return array(
+			'values' => $values,
+			'error' => $this->getLastStorageErrorMessage()
+		);
 	}
 
 	private function handleDashboardStatsAjax() {
+		$this->clearStorageError();
 		$this->ensureAuditSchema();
 		$pdo = $this->getAuditDb();
 		$now = time();
@@ -1212,6 +1407,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$sth->execute();
 			$stats['recent_events'] = $sth->fetchAll(\PDO::FETCH_ASSOC);
 		} catch (\Throwable $e) {
+			$this->setStorageError('Dashboard stats query failed: ' . $e->getMessage());
+			$stats['error'] = $this->truncate($e->getMessage(), 250);
 			$this->debugLog('Dashboard stats query failed', array('error' => $e->getMessage()));
 		}
 
@@ -1662,6 +1859,20 @@ JSEOF;
 		return $_SESSION['AMP_user']->checkSection('auditcompliance');
 	}
 
+	private function hasAuditAdminPermission() {
+		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+			return false;
+		}
+		if (method_exists($_SESSION['AMP_user'], 'getSections')) {
+			$sections = $_SESSION['AMP_user']->getSections();
+			if (is_array($sections) && in_array('*', $sections, true)) {
+				return true;
+			}
+		}
+		return $_SESSION['AMP_user']->checkSection('framework')
+			|| $_SESSION['AMP_user']->checkSection('advancedsettings');
+	}
+
 	private function checkExportRateLimit() {
 		$key = 'auditcompliance_export_last';
 		$minInterval = 10;
@@ -1687,9 +1898,14 @@ JSEOF;
 		$user = (string) ($this->getConfigSafe('audit_db_user', ''));
 		$password = (string) ($this->getConfigSafe('audit_db_password', ''));
 		$requireTls = ($this->getConfigSafe('audit_db_require_tls', '1')) === '1';
+		$requireExternal = ($this->getConfigSafe('audit_require_external_db', '1')) === '1';
 
 		if ($dsn === '') {
+			if ($requireExternal) {
+				throw new \Exception('External audit DB is required but DSN is not configured');
+			}
 			$this->auditDb = $this->db;
+			$this->debugLog('Audit DB local fallback mode is active', array());
 			return $this->auditDb;
 		}
 
@@ -1866,10 +2082,234 @@ JSEOF;
 
 	private function getConfigSafe($key, $default = '') {
 		$val = $this->getConfig($key);
-		if ($val === null || $val === false) {
-			return $default;
+		if ($val === null || $val === false || $val === '') {
+			$globalVal = $this->getGlobalConfig($key);
+			if ($globalVal === null || $globalVal === false || $globalVal === '') {
+				return $default;
+			}
+			return (string) $globalVal;
 		}
 		return (string) $val;
+	}
+
+	private function getGlobalConfig($moduleConfigKey) {
+		$settingKey = self::GLOBAL_SETTING_MAP[$moduleConfigKey] ?? null;
+		if ($settingKey === null || !isset($this->FreePBX->Config) || !is_object($this->FreePBX->Config)) {
+			return null;
+		}
+		try {
+			if (method_exists($this->FreePBX->Config, 'conf_setting_exists') && !$this->FreePBX->Config->conf_setting_exists($settingKey)) {
+				return null;
+			}
+			return $this->FreePBX->Config->get($settingKey);
+		} catch (\Throwable $e) {
+			$this->debugLog('Global config read failed', array(
+				'setting' => $settingKey,
+				'error' => $e->getMessage()
+			));
+			return null;
+		}
+	}
+
+	private function parseSettingsInput(array $input, $persist = false) {
+		$dsn = trim((string) ($input['audit_db_dsn'] ?? ''));
+		$user = trim((string) ($input['audit_db_user'] ?? ''));
+		$keepCurrentPassword = !empty($input['keep_current_password']);
+		$providedPassword = (string) ($input['audit_db_password'] ?? '');
+		$requireTls = !empty($input['audit_db_require_tls']) ? '1' : '0';
+		$requireExternal = !empty($input['audit_require_external_db']) ? '1' : '0';
+		$odbcBackend = strtolower(trim((string) ($input['audit_db_odbc_backend'] ?? '')));
+		$idleTimeout = (int) ($input['audit_session_idle_timeout_seconds'] ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
+
+		if (!in_array($odbcBackend, array('', 'mysql', 'pgsql'), true)) {
+			return array('status' => false, 'message' => 'ODBC backend must be empty, mysql, or pgsql');
+		}
+		if ($idleTimeout < 60 || $idleTimeout > 86400) {
+			return array('status' => false, 'message' => 'Idle timeout must be between 60 and 86400 seconds');
+		}
+		if ($dsn !== '' && strpos(strtolower($dsn), 'odbc:') === 0 && $odbcBackend === '') {
+			return array('status' => false, 'message' => 'ODBC backend is required when DSN starts with odbc:');
+		}
+		if ($dsn === '' && $requireExternal === '1') {
+			return array('status' => false, 'message' => 'External audit DB is required. Configure Audit DB DSN.');
+		}
+
+		try {
+			$this->validateDsnSecurity($dsn, $requireTls === '1');
+		} catch (\Throwable $e) {
+			return array('status' => false, 'message' => $this->truncate($e->getMessage(), 250));
+		}
+
+		$password = $providedPassword;
+		if ($persist && $keepCurrentPassword && $providedPassword === '') {
+			$password = (string) $this->getConfigSafe('audit_db_password', '');
+		}
+		if (!$persist && $providedPassword === '') {
+			$password = (string) $this->getConfigSafe('audit_db_password', '');
+		}
+
+		return array(
+			'status' => true,
+			'values' => array(
+				'audit_db_dsn' => $this->truncate($dsn, 2048),
+				'audit_db_user' => $this->truncate($user, 256),
+				'audit_db_password' => $this->truncate((string) $password, 2048),
+				'audit_db_require_tls' => $requireTls,
+				'audit_db_odbc_backend' => $odbcBackend,
+				'audit_require_external_db' => $requireExternal,
+				'audit_session_idle_timeout_seconds' => (string) $idleTimeout
+			)
+		);
+	}
+
+	private function ensureGlobalSettingsDefined() {
+		if (!isset($this->FreePBX->Config) || !is_object($this->FreePBX->Config) || !method_exists($this->FreePBX->Config, 'define_conf_setting')) {
+			return;
+		}
+
+		$settings = array(
+			'AUDITCOMPLIANCE_DB_DSN' => array(
+				'value' => '',
+				'defaultval' => '',
+				'type' => CONF_TYPE_TEXT,
+				'name' => 'Audit Compliance DB DSN',
+				'description' => 'PDO DSN used by the Audit Compliance module to write immutable audit events.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => true,
+				'hidden' => false
+			),
+			'AUDITCOMPLIANCE_DB_USER' => array(
+				'value' => '',
+				'defaultval' => '',
+				'type' => CONF_TYPE_TEXT,
+				'name' => 'Audit Compliance DB Username',
+				'description' => 'Database username used by Audit Compliance.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => true,
+				'hidden' => false
+			),
+			'AUDITCOMPLIANCE_DB_PASSWORD' => array(
+				'value' => '',
+				'defaultval' => '',
+				'type' => CONF_TYPE_TEXT,
+				'name' => 'Audit Compliance DB Password',
+				'description' => 'Database password used by Audit Compliance.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => true,
+				'hidden' => true
+			),
+			'AUDITCOMPLIANCE_DB_REQUIRE_TLS' => array(
+				'value' => true,
+				'defaultval' => true,
+				'type' => CONF_TYPE_BOOL,
+				'name' => 'Audit Compliance Require TLS',
+				'description' => 'Require encrypted DB transport for Audit Compliance remote database connections.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => false,
+				'hidden' => false
+			),
+			'AUDITCOMPLIANCE_DB_ODBC_BACKEND' => array(
+				'value' => '',
+				'defaultval' => '',
+				'type' => CONF_TYPE_TEXT,
+				'name' => 'Audit Compliance ODBC Backend',
+				'description' => 'Backend behind PDO ODBC DSN: mysql or pgsql.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => true,
+				'hidden' => false
+			),
+			'AUDITCOMPLIANCE_REQUIRE_EXTERNAL_DB' => array(
+				'value' => true,
+				'defaultval' => true,
+				'type' => CONF_TYPE_BOOL,
+				'name' => 'Audit Compliance Require External DB',
+				'description' => 'Require external audit database DSN and disable local fallback.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => false,
+				'hidden' => false
+			),
+			'AUDITCOMPLIANCE_SESSION_IDLE_TIMEOUT_SECONDS' => array(
+				'value' => (int) self::SESSION_IDLE_TIMEOUT_SECONDS,
+				'defaultval' => (int) self::SESSION_IDLE_TIMEOUT_SECONDS,
+				'type' => CONF_TYPE_INT,
+				'options' => '60,86400',
+				'name' => 'Audit Compliance Session Idle Timeout Seconds',
+				'description' => 'Idle timeout used to close audit sessions when no explicit logout is observed.',
+				'category' => 'Audit Compliance',
+				'module' => 'auditcompliance',
+				'emptyok' => false,
+				'hidden' => false
+			)
+		);
+
+		try {
+			foreach ($settings as $key => $definition) {
+				$this->FreePBX->Config->define_conf_setting($key, $definition, false);
+			}
+			if (method_exists($this->FreePBX->Config, 'commit_conf_settings')) {
+				$this->FreePBX->Config->commit_conf_settings();
+			}
+		} catch (\Throwable $e) {
+			$this->debugLog('Failed to define global settings', array('error' => $e->getMessage()));
+		}
+	}
+
+	private function setGlobalConfigValues(array $moduleValues) {
+		if (!isset($this->FreePBX->Config) || !is_object($this->FreePBX->Config) || !method_exists($this->FreePBX->Config, 'set_conf_values')) {
+			return;
+		}
+
+		$updates = array();
+		foreach ($moduleValues as $moduleKey => $value) {
+			$settingKey = self::GLOBAL_SETTING_MAP[$moduleKey] ?? null;
+			if ($settingKey === null) {
+				continue;
+			}
+			if (method_exists($this->FreePBX->Config, 'conf_setting_exists') && !$this->FreePBX->Config->conf_setting_exists($settingKey)) {
+				continue;
+			}
+			if ($moduleKey === 'audit_db_require_tls') {
+				$updates[$settingKey] = ($value === '1');
+				continue;
+			}
+			if ($moduleKey === 'audit_require_external_db') {
+				$updates[$settingKey] = ($value === '1');
+				continue;
+			}
+			if ($moduleKey === 'audit_session_idle_timeout_seconds') {
+				$updates[$settingKey] = (int) $value;
+				continue;
+			}
+			$updates[$settingKey] = (string) $value;
+		}
+
+		if (!empty($updates)) {
+			$this->FreePBX->Config->set_conf_values($updates, true, true);
+		}
+	}
+
+	private function restoreModuleConfigValues(array $moduleValues) {
+		foreach ($moduleValues as $key => $value) {
+			$this->setConfig($key, $value);
+		}
+	}
+
+	private function clearStorageError() {
+		$this->lastStorageErrorMessage = '';
+	}
+
+	private function setStorageError($message) {
+		$this->lastStorageErrorMessage = $this->truncate((string) $message, 250);
+	}
+
+	public function getLastStorageErrorMessage() {
+		return (string) $this->lastStorageErrorMessage;
 	}
 
 	private function setDefaultConfigIfMissing($key, $value) {
@@ -1969,6 +2409,25 @@ JSEOF;
 
 	private function debugLog($message, array $context = array()) {
 		$prefix = sprintf('[%s] ', $this->getChisinauTimestamp());
-		$this->FreePBX->Logger->debug($prefix . $message . ' ' . $this->safeJsonEncode($context));
+		$payload = $prefix . (string) $message . ' ' . $this->safeJsonEncode($context);
+		try {
+			if (isset($this->FreePBX->Logger) && is_object($this->FreePBX->Logger)) {
+				if (method_exists($this->FreePBX->Logger, 'channelLogWrite')) {
+					$this->FreePBX->Logger->channelLogWrite('auditcompliance', $payload, array(), 'DEBUG');
+					return;
+				}
+				if (method_exists($this->FreePBX->Logger, 'logWrite')) {
+					$this->FreePBX->Logger->logWrite($payload, array(), 'DEBUG');
+					return;
+				}
+				if (method_exists($this->FreePBX->Logger, 'log')) {
+					$this->FreePBX->Logger->log('DEBUG', $payload);
+					return;
+				}
+			}
+		} catch (\Throwable $e) {
+			// Logging must never break audit execution flow.
+		}
+		@error_log($payload);
 	}
 }

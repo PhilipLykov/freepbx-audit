@@ -2,6 +2,7 @@
 $timeline = $timeline ?? array();
 $authFailures = $authFailures ?? array();
 $actorFilter = $actorFilter ?? '';
+$timelineReadError = $timelineReadError ?? '';
 $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8'); };
 ?>
 <style>
@@ -256,10 +257,16 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li class="active"><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=discovery"><i class="fa fa-puzzle-piece"></i> <?php echo _('Module Discovery'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=settings"><i class="fa fa-cogs"></i> <?php echo _('Settings'); ?></a></li>
 	</ul>
 
 	<div class="display full-border">
 		<div class="fpbx-container">
+			<?php if (!empty($timelineReadError)): ?>
+				<div class="alert alert-warning">
+					<?php echo $esc($timelineReadError); ?>
+				</div>
+			<?php endif; ?>
 
 			<div class="audit-timeline-filter">
 				<form method="get" class="form-inline" style="display:flex;gap:10px;align-items:flex-end;width:100%;">

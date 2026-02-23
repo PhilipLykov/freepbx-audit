@@ -218,6 +218,7 @@ $preset = $request['preset'] ?? '';
 		<li class="active"><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=discovery"><i class="fa fa-puzzle-piece"></i> <?php echo _('Module Discovery'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=settings"><i class="fa fa-cogs"></i> <?php echo _('Settings'); ?></a></li>
 	</ul>
 
 	<div class="display full-border">
@@ -480,6 +481,9 @@ $preset = $request['preset'] ?? '';
 	function loadFilterValues() {
 		ajaxGet(AJAX_BASE + "getFilterValues&column=module_name", function(err, data) {
 			if (err || !data || !data.values) return;
+			if (data.error) {
+				console.warn("Audit filter values warning: " + data.error);
+			}
 			var sel = document.getElementById("audit-module");
 			var current = sel.value;
 			while (sel.options.length > 1) sel.remove(1);
@@ -509,6 +513,11 @@ $preset = $request['preset'] ?? '';
 		ajaxGet(url, function(err, data) {
 			if (err) {
 				tbody.innerHTML = '<tr><td colspan="9" class="audit-no-results"><i class="fa fa-exclamation-circle" style="color:#c0392b;"></i> Error: ' + esc(err) + '</td></tr>';
+				updatePagination(0, 0);
+				return;
+			}
+			if (data && data.error) {
+				tbody.innerHTML = '<tr><td colspan="9" class="audit-no-results"><i class="fa fa-exclamation-circle" style="color:#c0392b;"></i> Error: ' + esc(data.error) + '</td></tr>';
 				updatePagination(0, 0);
 				return;
 			}

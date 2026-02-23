@@ -267,6 +267,7 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 		<li><a href="?display=auditcompliance&view=search"><i class="fa fa-search"></i> <?php echo _('Search'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=timeline"><i class="fa fa-clock-o"></i> <?php echo _('Session Timeline'); ?></a></li>
 		<li><a href="?display=auditcompliance&view=discovery"><i class="fa fa-puzzle-piece"></i> <?php echo _('Module Discovery'); ?></a></li>
+		<li><a href="?display=auditcompliance&view=settings"><i class="fa fa-cogs"></i> <?php echo _('Settings'); ?></a></li>
 	</ul>
 
 	<div class="audit-dash-hero">
@@ -428,6 +429,10 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 	}
 
 	function renderDashboard(data) {
+		if (data && data.error) {
+			showError(data.error);
+			return;
+		}
 		document.getElementById("kpi-events-today").textContent = formatNumber(data.events_today);
 		document.getElementById("kpi-active-sessions").textContent = formatNumber(data.active_sessions);
 		document.getElementById("kpi-auth-failures").textContent = formatNumber(data.auth_failures_24h);
