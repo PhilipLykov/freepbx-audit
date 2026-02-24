@@ -155,6 +155,16 @@ psql -U postgres auditcompliance -c "
 | Missing sensitive-read pages | `calendargroups` and `logfiles_settings` pages not monitored | Added to `SENSITIVE_READ_PAGES` |
 | PHP 8.2 `DateTime::getLastErrors()` returning `false` | `parseDateInput()` could fail on PHP 8.2+ | Added `false` check alongside empty array check |
 
+### Hook noise reduction and cross-channel dedup (20-02-2026)
+
+| Issue | Impact | Resolution |
+|-------|--------|------------|
+| Extension create generates 5-6 events | Hooks for `addUser`, `addDevice`, `updateGroup`, `addEntryByGroupID` fire as sub-operations during GUI form submit, each creating a separate audit event | Hooks suppressed during `config.php` requests (GUI channel provides primary event with full change details) |
+| Extension delete generates 4 events | `delUser`, `delDevice` hooks fire during `ajax.php` processing, plus the JS AJAX interceptor beacon creates another event | Only first hook per `ajax.php` request captured via `eventCapturedThisRequest` flag; AJAX beacon suppressed via `hasRecentHookEventForModule()` cross-channel dedup |
+| Userman operations generate noise | Read-only AJAX commands (`setlocales`, `pwdTest`, `validators`, `nextTrns`) recorded as audit events | Added to `AJAX_READ_ONLY_COMMANDS` filter list |
+| Core grid/lookup AJAX commands captured | `getExtensionGrid`, `getDeviceGrid`, `getUserGrid`, `getnpanxxjson`, `populatenpanxx` are read-only | Added to core module's `AJAX_READ_ONLY_COMMANDS` |
+| AJAX delete events missing object ID | JS interceptor was not extracting `extensions[]` and other ID fields from POST body | JS interceptor sends `target_body` with key parameters; `extractObjectIdFromAjaxBody()` handles `extensions[]` arrays |
+
 ---
 
 ## Known Limitations

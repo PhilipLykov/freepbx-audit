@@ -9,6 +9,9 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ### Added
 
+- **Hook noise suppression** -- hooks that fire as internal sub-operations (e.g. `core::addUser`, `core::addDevice`, `contactmanager::addEntryByGroupID` during extension creation) are now suppressed when the primary GUI or AJAX event is already captured. During `config.php` requests hooks are fully suppressed (the GUI channel provides complete change details); during `ajax.php` requests only the first hook per PHP request is recorded.
+- **Cross-channel AJAX dedup** -- `hasRecentHookEventForModule()` prevents the JS AJAX interceptor from recording a duplicate event when a BMO hook has already captured the same operation within the dedup window. Apply Config events are exempted from this check.
+- **Expanded core AJAX read-only list** -- added `getextensiongrid`, `getdevicegrid`, `getusergrid`, `getnpanxxjson`, and `populatenpanxx` to the `AJAX_READ_ONLY_COMMANDS` for the `core` module, verified against FreePBX 17 `Core.class.php` source.
 - **ODBC database connection support** via `pdo_odbc`. The module can now connect to the audit database through Linux system ODBC data sources (`unixODBC`), enabling centralized driver-level TLS management and compliance with enterprise ODBC-only policies.
 - New config key `audit_db_odbc_backend` (`mysql` / `pgsql`) to explicitly specify the database engine behind an ODBC connection when auto-detection is insufficient.
 - Automatic ODBC backend detection via `SELECT version()` and `PDO::ATTR_SERVER_VERSION` heuristics, with fallback to `mysql`.

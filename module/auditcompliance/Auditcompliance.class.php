@@ -55,6 +55,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		),
 		'core' => array(
 			'getextensiondetails', 'getdestinations', 'getjson',
+			'getextensiongrid', 'getdevicegrid', 'getusergrid',
+			'getnpanxxjson', 'populatenpanxx',
 		),
 		'cdr' => array(
 			'gethtml5', 'playback',
@@ -668,18 +670,56 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 	}
 
+	/**
+	 * Broader cross-channel dedup: checks if a recent hook event exists for the
+	 * same session and module, regardless of action name. Used by the AJAX
+	 * interceptor to avoid duplicating events already captured by hooks during
+	 * the same user operation (e.g. hook fires during ajax.php processing, then
+	 * the JS beacon fires a separate request to record it again).
+	 */
+	private function hasRecentHookEventForModule($sessionId, $moduleName) {
+		try {
+			$this->ensureAuditSchema();
+			$pdo = $this->getAuditDb();
+			$cutoff = time() - self::DEDUP_WINDOW_SECONDS;
+			$sql = "SELECT COUNT(*) FROM audit_events WHERE session_id = ? AND module_name = ? AND channel = 'hook' AND occurred_at_unix >= ?";
+			$sth = $pdo->prepare($sql);
+			$sth->execute(array($sessionId, $moduleName, $cutoff));
+			return ((int) $sth->fetchColumn()) > 0;
+		} catch (\Throwable $e) {
+			return false;
+		}
+	}
+
 	// ----------------------------------------------------------------
 	// BMO hook handlers for cross-module write interception
 	// ----------------------------------------------------------------
 
 	/**
 	 * Generic hook handler for cross-module write interception.
-	 * Routes through the unified capture router with deduplication.
+	 *
+	 * Hooks fire as internal sub-operations (e.g. creating an extension triggers
+	 * addUser + addDevice + contactmanager hooks). To avoid noise:
+	 *   - During config.php requests: hooks are suppressed because doConfigPageInit
+	 *     captures the primary GUI event with full change details.
+	 *   - During ajax.php requests: only the first hook per request is captured;
+	 *     the AJAX interceptor provides the primary event.
 	 */
 	public function captureHookEvent($callerModule, $callerMethod) {
 		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
 			return;
 		}
+
+		$requestUri = strtolower((string) ($_SERVER['REQUEST_URI'] ?? ''));
+
+		if (strpos($requestUri, 'config.php') !== false) {
+			return;
+		}
+
+		if ($this->eventCapturedThisRequest) {
+			return;
+		}
+
 		try {
 			$sessionId = $_SESSION[self::SESSION_KEY_ID] ?? null;
 			if (empty($sessionId)) {
@@ -705,6 +745,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'changed' => $this->flattenHookArgs($hookArgs)
 				)
 			));
+			$this->eventCapturedThisRequest = true;
 		} catch (\Throwable $e) {
 			$this->debugLog('Hook audit failed', array(
 				'error' => $e->getMessage(),
@@ -1570,6 +1611,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			&& in_array($targetCommand, array('reload', 'retrieve_conf', 'apply_config', ''), true));
 		if ($isApplyConfig) {
 			$targetCommand = 'apply_config';
+		}
+
+		if (!$isApplyConfig && $this->hasRecentHookEventForModule($sessionId, $targetModule)) {
+			return array('status' => false, 'message' => 'Skipped (hook already captured)');
 		}
 
 		$objectId = $this->extractObjectIdFromAjaxBody($targetBody, $targetUrl);
