@@ -328,7 +328,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
-					if (!empty($requestSnapshot[$key])) {
+					if (isset($requestSnapshot[$key]) && (string) $requestSnapshot[$key] !== '') {
 						$objectId = (string) $requestSnapshot[$key];
 						break;
 					}
@@ -1567,10 +1567,15 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		if (!empty($existingSessionId) && $lastActivity > 0) {
 			if (($currentUnix - $lastActivity) > $idleTimeout) {
-				$this->recordTimeoutEvent((string) $existingSessionId, $actor);
-				$this->closeSession((string) $existingSessionId, 'timeout');
+				try {
+					$this->recordTimeoutEvent((string) $existingSessionId, $actor);
+					$this->closeSession((string) $existingSessionId, 'timeout');
+				} catch (\Throwable $e) {
+					$this->debugLog('Session timeout recording failed', array('error' => $e->getMessage()));
+				}
 				unset(
 					$_SESSION[self::SESSION_KEY_ID],
+					$_SESSION[self::SESSION_KEY_LAST_ACTIVITY],
 					$_SESSION[self::SESSION_KEY_LOGIN_RECORDED]
 				);
 			} else {
@@ -1579,14 +1584,21 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			}
 		}
 
-		$this->closeStaleActiveSessions($actor);
+		try {
+			$this->closeStaleActiveSessions($actor);
+		} catch (\Throwable $e) {
+			$this->debugLog('Stale session cleanup failed', array('error' => $e->getMessage()));
+		}
 
 		$newSessionId = $this->newSessionId();
+		try {
+			$this->appendSessionStart($newSessionId, $actor);
+			$this->recordLoginEvent($newSessionId, $actor);
+		} catch (\Throwable $e) {
+			$this->debugLog('Session start recording failed', array('error' => $e->getMessage()));
+		}
 		$_SESSION[self::SESSION_KEY_ID] = $newSessionId;
 		$_SESSION[self::SESSION_KEY_LAST_ACTIVITY] = $currentUnix;
-
-		$this->appendSessionStart($newSessionId, $actor);
-		$this->recordLoginEvent($newSessionId, $actor);
 
 		return $newSessionId;
 	}
@@ -1762,7 +1774,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 
 		$isApplyConfig = ($targetModule === 'framework'
-			&& in_array($targetCommand, array('reload', 'retrieve_conf', 'apply_config', ''), true));
+			&& in_array($targetCommand, array('reload', 'retrieve_conf', 'apply_config'), true));
 		if ($isApplyConfig) {
 			$targetCommand = 'apply_config';
 		}
@@ -1895,11 +1907,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if ($body !== '') {
 			parse_str($body, $params);
 			if (!empty($params)) {
-				if (!empty($params['extensions']) && is_array($params['extensions'])) {
+				if (isset($params['extensions']) && is_array($params['extensions']) && $params['extensions'] !== array()) {
 					return $this->truncate(implode(',', array_slice($params['extensions'], 0, 10)), 256);
 				}
 				foreach ($candidates as $key) {
-					if (!empty($params[$key])) {
+					if (isset($params[$key]) && (string) $params[$key] !== '') {
 						return $this->truncate((string) $params[$key], 256);
 					}
 				}
@@ -1911,7 +1923,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			if ($qPos !== false) {
 				parse_str(substr($url, $qPos + 1), $urlParams);
 				foreach ($candidates as $key) {
-					if (!empty($urlParams[$key])) {
+					if (isset($urlParams[$key]) && (string) $urlParams[$key] !== '') {
 						return $this->truncate((string) $urlParams[$key], 256);
 					}
 				}
@@ -2026,12 +2038,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 		$dt = \DateTime::createFromFormat('d-m-Y', $value, $tz);
 		$err = ($dt !== false) ? $dt::getLastErrors() : false;
-		if ($dt !== false && ($err === false || !array_sum($err))) {
+		$hasErrors = is_array($err) && (($err['warning_count'] ?? 0) + ($err['error_count'] ?? 0) > 0);
+		if ($dt !== false && !$hasErrors) {
 			return $dt;
 		}
 		$dt = \DateTime::createFromFormat('Y-m-d', $value, $tz);
 		$err = ($dt !== false) ? $dt::getLastErrors() : false;
-		if ($dt !== false && ($err === false || !array_sum($err))) {
+		$hasErrors = is_array($err) && (($err['warning_count'] ?? 0) + ($err['error_count'] ?? 0) > 0);
+		if ($dt !== false && !$hasErrors) {
 			return $dt;
 		}
 		return null;
@@ -2561,6 +2575,8 @@ JSEOF;
 			}
 			if (is_array($value)) {
 				$out[$key] = $this->redactSensitiveData($value);
+			} elseif (is_object($value)) {
+				$out[$key] = $this->truncate(get_class($value) . '(object)', 2048);
 			} elseif (is_scalar($value) || $value === null) {
 				$out[$key] = $this->truncate((string) $value, 2048);
 			}
@@ -2614,12 +2630,12 @@ JSEOF;
 		$pdo = $this->getAuditDb();
 
 		try {
-			$sth = $pdo->prepare("SELECT 1 FROM audit_events LIMIT 1");
-			$sth->execute();
+			$pdo->prepare("SELECT 1 FROM audit_events LIMIT 1")->execute();
+			$pdo->prepare("SELECT 1 FROM audit_sessions LIMIT 1")->execute();
 			$this->schemaReady = true;
 			return;
 		} catch (\Throwable $e) {
-			// Table doesn't exist yet — proceed with full DDL
+			// Table(s) missing — proceed with full DDL
 		}
 
 		$driver = $this->getDriverName($pdo);
@@ -2746,28 +2762,32 @@ JSEOF;
 
 	private function createImmutabilityTriggers(PDO $pdo, $driver) {
 		if ($driver === 'pgsql') {
-			$pdo->exec("CREATE OR REPLACE FUNCTION audit_deny_modifications() RETURNS trigger AS \$\$
-				BEGIN
-					RAISE EXCEPTION 'Audit tables are append-only';
-				END;
-			\$\$ LANGUAGE plpgsql");
-			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_update ON audit_events");
-			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_delete ON audit_events");
-			$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_sessions_no_delete ON audit_sessions");
-			$pdo->exec("CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
-			$pdo->exec("CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
-			$pdo->exec("CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+			try {
+				$pdo->exec("CREATE OR REPLACE FUNCTION audit_deny_modifications() RETURNS trigger AS \$\$
+					BEGIN
+						RAISE EXCEPTION 'Audit tables are append-only';
+					END;
+				\$\$ LANGUAGE plpgsql");
+				$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_update ON audit_events");
+				$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_events_no_delete ON audit_events");
+				$pdo->exec("DROP TRIGGER IF EXISTS trg_audit_sessions_no_delete ON audit_sessions");
+				$pdo->exec("CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+				$pdo->exec("CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+				$pdo->exec("CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions FOR EACH ROW EXECUTE FUNCTION audit_deny_modifications()");
+			} catch (\Throwable $e) {
+				$this->debugLog('PostgreSQL trigger creation failed (non-fatal)', array('error' => $e->getMessage()));
+			}
 			return;
 		}
 
 		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_events_no_update");
 		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_events_no_delete");
 		$this->safeExec($pdo, "DROP TRIGGER IF EXISTS trg_audit_sessions_no_delete");
-		$pdo->exec("CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events
+		$this->safeExec($pdo, "CREATE TRIGGER trg_audit_events_no_update BEFORE UPDATE ON audit_events
 			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
-		$pdo->exec("CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events
+		$this->safeExec($pdo, "CREATE TRIGGER trg_audit_events_no_delete BEFORE DELETE ON audit_events
 			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
-		$pdo->exec("CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions
+		$this->safeExec($pdo, "CREATE TRIGGER trg_audit_sessions_no_delete BEFORE DELETE ON audit_sessions
 			FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Audit tables are append-only'");
 	}
 
@@ -2933,14 +2953,14 @@ JSEOF;
 
 		$dsnLower = strtolower($dsn);
 		if (strpos($dsnLower, 'mysql:') === 0) {
-			if (strpos($dsnLower, 'ssl') === false) {
-				throw new \Exception('TLS is required for MySQL/MariaDB audit DB connections');
+			if (preg_match('/[;?&]ssl\s*=|^mysql:.*ssl\s*=/', $dsnLower) !== 1) {
+				throw new \Exception('TLS is required for MySQL/MariaDB audit DB connections. Add ;ssl=true to DSN.');
 			}
 			return;
 		}
 		if (strpos($dsnLower, 'pgsql:') === 0) {
-			if (strpos($dsnLower, 'sslmode=') === false) {
-				throw new \Exception('TLS is required for PostgreSQL audit DB connections');
+			if (preg_match('/[;?& ]sslmode\s*=/', $dsnLower) !== 1) {
+				throw new \Exception('TLS is required for PostgreSQL audit DB connections. Add ;sslmode=require to DSN.');
 			}
 		}
 	}
@@ -3058,6 +3078,9 @@ JSEOF;
 		if (!in_array($connectionType, array('mysql', 'pgsql', 'odbc'), true)) {
 			return array('status' => false, 'message' => 'Connection type must be mysql, pgsql, or odbc');
 		}
+		if (!in_array($odbcBackend, array('', 'mysql', 'pgsql'), true)) {
+			return array('status' => false, 'message' => 'ODBC backend must be empty, mysql, or pgsql');
+		}
 		try {
 			$dsn = $this->buildConnectionDsnFromInput($input, $connectionType, $requireExternal === '1', $requireTls === '1', $odbcBackend, $dsn);
 		} catch (\Throwable $e) {
@@ -3065,10 +3088,6 @@ JSEOF;
 		}
 		$dsnScheme = $this->getDsnScheme($dsn);
 		$idleTimeout = (int) ($input['audit_session_idle_timeout_seconds'] ?? self::SESSION_IDLE_TIMEOUT_SECONDS);
-
-		if (!in_array($odbcBackend, array('', 'mysql', 'pgsql'), true)) {
-			return array('status' => false, 'message' => 'ODBC backend must be empty, mysql, or pgsql');
-		}
 		if ($connectionType !== 'odbc') {
 			$odbcBackend = '';
 		}
@@ -3099,10 +3118,7 @@ JSEOF;
 		}
 
 		$password = $providedPassword;
-		if ($persist && $keepCurrentPassword && $providedPassword === '') {
-			$password = (string) $this->getConfigSafe('audit_db_password', '');
-		}
-		if (!$persist && $providedPassword === '') {
+		if ($providedPassword === '') {
 			$password = (string) $this->getConfigSafe('audit_db_password', '');
 		}
 
@@ -3169,6 +3185,13 @@ JSEOF;
 				throw new \Exception('For direct database connection, Hostname and DB name are required.');
 			}
 			return '';
+		}
+
+		if (preg_match('/[;=\'\"\\\\]/', $host)) {
+			throw new \Exception('Hostname contains invalid characters (;, =, quotes, or backslash are not allowed).');
+		}
+		if (preg_match('/[;=\'\"\\\\]/', $dbName)) {
+			throw new \Exception('Database name contains invalid characters (;, =, quotes, or backslash are not allowed).');
 		}
 
 		if ($connectionType === 'pgsql') {
@@ -3451,7 +3474,7 @@ JSEOF;
 			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {
-			if (!empty($_REQUEST[$key])) {
+			if (isset($_REQUEST[$key]) && (string) $_REQUEST[$key] !== '') {
 				return $this->truncate((string) $_REQUEST[$key], 256);
 			}
 		}

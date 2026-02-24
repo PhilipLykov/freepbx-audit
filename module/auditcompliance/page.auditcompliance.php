@@ -39,6 +39,7 @@ if ($view === 'settings' && strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? '
 			} else {
 				$settingsNotice = FreePBX::Auditcompliance()->saveSettingsFromUi($_POST);
 			}
+			$_SESSION[$csrfSessionKey] = bin2hex(random_bytes(16));
 		}
 	}
 }

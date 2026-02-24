@@ -389,7 +389,7 @@ $preset = $request['preset'] ?? '';
 	var sortDir = "DESC";
 	var selectedRowIdx = -1;
 	var currentRows = [];
-	var preset = <?php echo json_encode($preset); ?>;
+	var preset = <?php echo json_encode($preset, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 
 	function esc(str) {
 		var d = document.createElement("div");
