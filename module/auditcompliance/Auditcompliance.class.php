@@ -326,6 +326,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'cid', 'caid', 'csrref', 'fileid',
 					'calendarid', 'eventid',
 					'destid', 'custom_exten', 'old_custom_exten',
+					'language_id', 'page_group', 'route_id', 'disa_id',
 					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
@@ -620,6 +621,72 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'id' => 'custom_exten',
 			'name' => 'description',
 		),
+		'ringgroups' => array(
+			'method' => array('Ringgroups', 'listRinggroups'),
+			'id' => 'grpnum',
+			'name' => 'description',
+		),
+		'queues' => array(
+			'method' => array('Queues', 'listQueues'),
+			'id' => 'extension',
+			'name' => 'descr',
+		),
+		'conferences' => array(
+			'method' => array('Conferences', 'getAllConferences'),
+			'id' => 'exten',
+			'name' => 'description',
+		),
+		'paging' => array(
+			'method' => array('Paging', 'listGroups'),
+			'id' => 'page_group',
+			'name' => 'description',
+		),
+		'miscdests' => array(
+			'method' => array('Miscdests', 'mdlist'),
+			'args' => array(true),
+			'id' => 'id',
+			'name' => 'description',
+		),
+		'daynight' => array(
+			'method' => array('Daynight', 'listCallFlows'),
+			'id' => 'ext',
+			'name' => 'dest',
+		),
+		'pinsets' => array(
+			'method' => array('Pinsets', 'listPinsets'),
+			'id' => 'pinsets_id',
+			'name' => 'description',
+		),
+		'languages' => array(
+			'method' => array('Languages', 'listLanguages'),
+			'id' => 'language_id',
+			'name' => 'description',
+		),
+		'music' => array(
+			'method' => array('Music', 'getCategories'),
+			'id' => 'id',
+			'name' => 'category',
+		),
+		'callrecording' => array(
+			'method' => array('Callrecording', 'listAll'),
+			'id' => 'callrecording_id',
+			'name' => 'description',
+		),
+		'disa' => array(
+			'method' => array('Disa', 'listAll'),
+			'id' => 'disa_id',
+			'name' => 'displayname',
+		),
+		'routing' => array(
+			'method' => array('Core', 'getAllRoutes'),
+			'id' => 'route_id',
+			'name' => 'name',
+		),
+		'did' => array(
+			'method' => array('Core', 'getAllDIDs'),
+			'id' => array('extension', 'cidnum'),
+			'name' => 'description',
+		),
 	);
 
 	private function cacheModuleEntityNames($moduleLower) {
@@ -635,13 +702,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$methodName = $spec['method'][1];
 			$idField = $spec['id'];
 			$nameField = $spec['name'];
+			$args = $spec['args'] ?? array();
 
 			$instance = $this->FreePBX->$className;
 			if (!method_exists($instance, $methodName)) {
 				return;
 			}
 
-			$items = $instance->$methodName();
+			$items = call_user_func_array(array($instance, $methodName), $args);
 			$map = array();
 
 			if (is_array($items)) {
@@ -649,11 +717,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					if (!is_array($item)) {
 						continue;
 					}
-					$id = $idField !== null
-						? (string) ($item[$idField] ?? '')
-						: (string) $key;
+					if (is_array($idField)) {
+						$parts = array();
+						foreach ($idField as $f) {
+							$parts[] = (string) ($item[$f] ?? '');
+						}
+						$id = implode('/', $parts);
+					} elseif ($idField !== null) {
+						$id = (string) ($item[$idField] ?? '');
+					} else {
+						$id = (string) $key;
+					}
 					$name = (string) ($item[$nameField] ?? '');
-					if ($id !== '' && $name !== '') {
+					if ($id !== '' && $id !== '/' && $name !== '') {
 						$map[$id] = $name;
 					}
 				}
@@ -1936,6 +2012,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
 			'route_id', 'trunknum', 'file',
 			'destid', 'custom_exten', 'old_custom_exten',
+			'language_id', 'page_group', 'disa_id',
 			'name', 'username',
 		);
 
@@ -3511,6 +3588,7 @@ JSEOF;
 			'cid', 'caid', 'csrref', 'fileid',
 			'calendarid', 'eventid',
 			'destid', 'custom_exten', 'old_custom_exten',
+			'language_id', 'page_group', 'route_id', 'disa_id',
 			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {
