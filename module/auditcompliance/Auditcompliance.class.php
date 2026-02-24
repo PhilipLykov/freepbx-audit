@@ -115,6 +115,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'logfiles' => array(
 			'log_file_read',
 		),
+		'configedit' => array(
+			'load',
+		),
 	);
 
 	private const BEFORE_STATE_READERS = array(
@@ -2186,6 +2189,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if ($body !== '') {
 			parse_str($body, $params);
 			if (!empty($params)) {
+				if (isset($params['file']) && (string) $params['file'] !== ''
+					&& isset($params['path']) && (string) $params['path'] !== '') {
+					return $this->truncate(
+						rtrim((string) $params['path'], '/') . '/' . (string) $params['file'],
+						256
+					);
+				}
 				if (isset($params['extensions']) && is_array($params['extensions']) && $params['extensions'] !== array()) {
 					return $this->truncate(implode(',', array_slice($params['extensions'], 0, 10)), 256);
 				}
@@ -2228,6 +2238,18 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$payload = array('command' => $command, 'http_status' => $httpStatus);
 		if ($body !== '') {
 			parse_str($body, $params);
+			if (!empty($params['file'])) {
+				$file = $this->truncate((string) $params['file'], 256);
+				$payload['file'] = $file;
+				if (!empty($params['path'])) {
+					$path = $this->truncate((string) $params['path'], 256);
+					$payload['path'] = $path;
+					$payload['file_path'] = $this->truncate(
+						rtrim($path, '/') . '/' . $file,
+						512
+					);
+				}
+			}
 			if (!empty($params['type'])) {
 				$payload['type'] = $this->truncate((string) $params['type'], 128);
 			}
@@ -2486,7 +2508,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				}
 			}catch(e){}}
 			if(body&&typeof body==="string"){try{
-				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers"];
+				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers","file","path"];
 				var bp2=new URLSearchParams(body);
 				var parts=[];
 				for(var ki=0;ki<idKeys.length;ki++){
