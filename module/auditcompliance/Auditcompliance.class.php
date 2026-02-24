@@ -254,14 +254,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$displayLower = strtolower((string) $display);
 		$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
 
-		if ($this->isStateChangingAction($action)) {
+		if ($this->isStateChangingAction($action, $method)) {
 			$this->registerShutdownCapture($sessionId, $display, $action, $method);
 		}
 
 		if ($method === 'post') {
 			$this->captureGuiPostEvent($sessionId, $display);
 		} elseif ($method === 'get') {
-			if ($this->isStateChangingAction($action)) {
+			if ($this->isStateChangingAction($action, 'get')) {
 				$this->captureGuiGetActionEvent($sessionId, $display, $action);
 			} elseif (isset(self::SENSITIVE_READ_PAGES[$displayLower])) {
 				$this->captureSensitiveReadEvent($sessionId, $display, $displayLower);
@@ -294,7 +294,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 					'announcement_id', 'callrecording_id', 'channel',
-					'orig_account', 'trunknum'
+					'orig_account', 'trunknum',
+					'username', 'displayname', 'name',
 				);
 				foreach ($candidates as $key) {
 					if (!empty($requestSnapshot[$key])) {
@@ -367,17 +368,34 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 	}
 
+	/**
+	 * Prefixes for POST actions that modify state (form submissions).
+	 * Includes all CRUD verbs.
+	 */
 	private static $STATE_CHANGING_PREFIXES = array(
 		'del', 'delete', 'remove', 'add', 'edit', 'edt', 'update', 'save',
 		'create', 'modify', 'enable', 'disable', 'toggle', 'reset',
 		'copy', 'duplicate', 'submit'
 	);
 
-	private function isStateChangingAction($action) {
+	/**
+	 * Prefixes for GET actions that modify state immediately (without a form).
+	 * In FreePBX, GET actions like "adduser" or "editext" just DISPLAY a form,
+	 * while "delGRP" or "removeDID" actually perform the operation via redirect.
+	 */
+	private static $GET_STATE_CHANGING_PREFIXES = array(
+		'del', 'delete', 'remove', 'enable', 'disable', 'toggle', 'reset',
+		'copy', 'duplicate'
+	);
+
+	private function isStateChangingAction($action, $method = null) {
 		if ($action === '') {
 			return false;
 		}
-		foreach (self::$STATE_CHANGING_PREFIXES as $prefix) {
+		$prefixes = ($method === 'get')
+			? self::$GET_STATE_CHANGING_PREFIXES
+			: self::$STATE_CHANGING_PREFIXES;
+		foreach ($prefixes as $prefix) {
 			if (strpos($action, $prefix) === 0) {
 				return true;
 			}
@@ -3240,11 +3258,12 @@ JSEOF;
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
-			'orig_account', 'trunknum'
+			'orig_account', 'trunknum',
+			'username', 'displayname', 'name',
 		);
 		foreach ($candidates as $key) {
 			if (!empty($_REQUEST[$key])) {
-				return (string) $_REQUEST[$key];
+				return $this->truncate((string) $_REQUEST[$key], 256);
 			}
 		}
 		return '';
