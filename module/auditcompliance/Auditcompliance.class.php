@@ -1838,6 +1838,12 @@ JSEOF;
 		return null;
 	}
 
+	private static $DIFF_SKIP_KEYS = array(
+		'display', 'action', 'Submit', 'submit', 'view', 'extdisplay',
+		'fw_popover_process', 'fw_popover', 'nonce', 'fw_csrf_token',
+		'goto0', 'goto1', 'goto2'
+	);
+
 	/**
 	 * Compare before and after state. Only keys present in BOTH
 	 * datasets are compared to avoid false positives from form
@@ -1847,12 +1853,13 @@ JSEOF;
 	private function computeChangeDiff($before, $after) {
 		$diff = array('added' => array(), 'removed' => array(), 'changed' => array());
 		if (!is_array($before) || !is_array($after)) {
-			if (is_array($after)) {
-				$diff['changed'] = $after;
-			}
 			return $diff;
 		}
+		$skipKeys = array_flip(self::$DIFF_SKIP_KEYS);
 		foreach ($after as $key => $newVal) {
+			if (isset($skipKeys[$key])) {
+				continue;
+			}
 			if (!array_key_exists($key, $before)) {
 				continue;
 			}
@@ -1868,7 +1875,32 @@ JSEOF;
 		if (is_array($old) || is_array($new)) {
 			return json_encode($old) !== json_encode($new);
 		}
-		return (string) $old !== (string) $new;
+		$oldStr = trim((string) $old);
+		$newStr = trim((string) $new);
+		if ($oldStr === $newStr) {
+			return false;
+		}
+		if ($this->areBothFalsy($oldStr, $newStr)) {
+			return false;
+		}
+		$oldNorm = $this->normalizeListValue($oldStr);
+		$newNorm = $this->normalizeListValue($newStr);
+		return $oldNorm !== $newNorm;
+	}
+
+	private function areBothFalsy($a, $b) {
+		$falsy = array('' => true, '0' => true, 'no' => true, 'false' => true, 'none' => true, 'null' => true);
+		return isset($falsy[strtolower($a)]) && isset($falsy[strtolower($b)]);
+	}
+
+	private function normalizeListValue($val) {
+		if (strpos($val, '-') !== false || strpos($val, "\n") !== false
+			|| strpos($val, ',') !== false || strpos($val, ' ') !== false) {
+			$parts = preg_split('/[\-\n\r,\s]+/', $val, -1, PREG_SPLIT_NO_EMPTY);
+			sort($parts);
+			return implode(',', $parts);
+		}
+		return $val;
 	}
 
 	private function redactSensitiveData(array $input) {
