@@ -277,6 +277,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$displayLower = strtolower((string) $display);
 		$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
 
+		if ($method === 'get' && !$this->isStateChangingAction($action, 'get')) {
+			$this->cacheModuleEntityNames($displayLower);
+		}
+
 		if ($this->isStateChangingAction($action, $method)) {
 			$this->registerShutdownCapture($sessionId, $display, $action, $method);
 		}
@@ -330,6 +334,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					}
 				}
 
+				$displayLower = strtolower((string) $display);
+				$effectiveAction = $action;
+
 				$changePayload = array(
 					'before' => null, 'after' => null,
 					'added' => array(), 'removed' => array(),
@@ -339,9 +346,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					try {
 						$previousPost = $self->getPreviousPostData($display, $objectId);
 						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
+						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)) {
+							$effectiveAction = 'create';
+						}
 					} catch (\Throwable $diffErr) {
 						// Fall back to generic payload
 					}
+				} else {
+					$objectId = $self->resolveObjectId($displayLower, $objectId);
 				}
 
 				$self->routeEvent(array(
@@ -349,10 +361,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'session_phase' => 'activity',
 					'channel' => 'gui',
 					'module_name' => (string) $display,
-					'action' => $action,
+					'action' => $effectiveAction,
 					'outcome' => 'success',
 					'route' => (string) $display,
-					'object_type' => strtolower((string) $display),
+					'object_type' => $displayLower,
 					'object_id' => $objectId,
 					'request_method' => $serverSnapshot['REQUEST_METHOD'],
 					'request_uri' => $serverSnapshot['REQUEST_URI'],
@@ -370,6 +382,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
 			$objectId = $this->detectObjectId();
 			$previousPost = $this->getPreviousPostData($display, $objectId);
+
+			if ($previousPost === null && in_array($action, array('update', 'save', 'submit'), true)) {
+				$action = 'create';
+			}
+
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -432,6 +449,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private function captureGuiGetActionEvent($sessionId, $display, $action) {
 		try {
 			$objectId = $this->detectObjectId();
+			$displayLower = strtolower((string) $display);
+			$objectId = $this->resolveObjectId($displayLower, $objectId);
+
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -494,7 +514,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private function captureSensitiveReadEvent($sessionId, $display, $displayLower) {
 		try {
 			$objectId = $this->detectObjectId();
-			$objectId = $this->resolveNumericObjectId($displayLower, $objectId);
+			$objectId = $this->resolveObjectId($displayLower, $objectId);
 
 			$readType = self::SENSITIVE_READ_PAGES[$displayLower];
 			$this->routeEvent(array(
@@ -516,8 +536,6 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'changed' => array('view' => $readType)
 				)
 			));
-
-			$this->cacheModuleEntityNames($displayLower);
 		} catch (\Throwable $e) {
 			$this->debugLog('Sensitive read audit failed', array(
 				'error' => $e->getMessage(),
@@ -534,25 +552,92 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 * populated when the user views the module page (sensitive read) and
 	 * consumed when a subsequent AJAX event needs to resolve an ID to a name.
 	 */
+	private static $ENTITY_CACHE_MAP = array(
+		'userman' => array(
+			'method' => array('Userman', 'getAllUsers'),
+			'id' => 'id',
+			'name' => 'username',
+		),
+		'ivr' => array(
+			'method' => array('Ivr', 'getDetails'),
+			'id' => 'id',
+			'name' => 'name',
+		),
+		'timeconditions' => array(
+			'method' => array('Timeconditions', 'listTimeconditions'),
+			'id' => 'timeconditions_id',
+			'name' => 'displayname',
+		),
+		'announcement' => array(
+			'method' => array('Announcement', 'getAnnouncements'),
+			'id' => 'announcement_id',
+			'name' => 'description',
+		),
+		'trunks' => array(
+			'method' => array('Core', 'listTrunks'),
+			'id' => 'trunkid',
+			'name' => 'name',
+		),
+		'contactmanager' => array(
+			'method' => array('Contactmanager', 'getGroups'),
+			'id' => 'id',
+			'name' => 'name',
+		),
+		'certman' => array(
+			'method' => array('Certman', 'getAllManagedCertificates'),
+			'id' => 'cid',
+			'name' => 'description',
+		),
+		'backup' => array(
+			'method' => array('Backup', 'listBackups'),
+			'id' => 'id',
+			'name' => 'name',
+		),
+		'calendar' => array(
+			'method' => array('Calendar', 'listCalendars'),
+			'id' => null,
+			'name' => 'name',
+		),
+	);
+
 	private function cacheModuleEntityNames($moduleLower) {
 		try {
-			$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
-
-			if ($moduleLower === 'userman') {
-				$users = $this->FreePBX->Userman->getAllUsers();
-				$map = array();
-				if (is_array($users)) {
-					foreach ($users as $u) {
-						$id = (string) ($u['id'] ?? '');
-						$uname = (string) ($u['username'] ?? '');
-						if ($id !== '' && $uname !== '') {
-							$map[$id] = $uname;
-						}
-					}
-				}
-				$cache['userman'] = $map;
+			if (!isset(self::$ENTITY_CACHE_MAP[$moduleLower])) {
+				return;
 			}
 
+			$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
+
+			$spec = self::$ENTITY_CACHE_MAP[$moduleLower];
+			$className = $spec['method'][0];
+			$methodName = $spec['method'][1];
+			$idField = $spec['id'];
+			$nameField = $spec['name'];
+
+			$instance = $this->FreePBX->$className;
+			if (!method_exists($instance, $methodName)) {
+				return;
+			}
+
+			$items = $instance->$methodName();
+			$map = array();
+
+			if (is_array($items)) {
+				foreach ($items as $key => $item) {
+					if (!is_array($item)) {
+						continue;
+					}
+					$id = $idField !== null
+						? (string) ($item[$idField] ?? '')
+						: (string) $key;
+					$name = (string) ($item[$nameField] ?? '');
+					if ($id !== '' && $name !== '') {
+						$map[$id] = $name;
+					}
+				}
+			}
+
+			$cache[$moduleLower] = $map;
 			$_SESSION[self::SESSION_KEY_ENTITY_NAMES] = $cache;
 		} catch (\Throwable $e) {
 			// Non-critical; caching failure should not break audit
@@ -560,12 +645,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	}
 
 	/**
-	 * Resolves a numeric object ID to a human-readable name using the session
-	 * cache populated by cacheModuleEntityNames(). Falls back to the original
-	 * ID if no cached name is available.
+	 * Resolves an opaque object ID (numeric or UUID) to a human-readable name
+	 * using the session cache populated by cacheModuleEntityNames().
+	 * Falls back to the original ID if no cached name is available.
 	 */
-	private function resolveNumericObjectId($moduleLower, $objectId) {
-		if ($objectId === '' || !ctype_digit((string) $objectId)) {
+	private function resolveObjectId($moduleLower, $objectId) {
+		if ($objectId === '') {
 			return $objectId;
 		}
 		$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
@@ -1683,8 +1768,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 
 		$displayModule = $this->normalizeAjaxModuleName($targetModule, $targetCommand, $targetBody);
+		$displayModuleLower = strtolower($displayModule);
 		$objectId = $this->extractObjectIdFromAjaxBody($targetBody, $targetUrl);
-		$objectId = $this->resolveNumericObjectId(strtolower($targetModule), $objectId);
+		$objectId = $this->resolveObjectId($displayModuleLower, $objectId);
 
 		try {
 			$this->routeEvent(array(
@@ -1704,7 +1790,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'added' => array(), 'removed' => array(),
 					'changed' => $isApplyConfig
 						? array('action' => 'apply_config', 'description' => 'Administrator applied configuration changes to Asterisk')
-						: $this->buildAjaxChangePayload($targetCommand, $httpStatus, $targetBody, strtolower($targetModule))
+						: $this->buildAjaxChangePayload($targetCommand, $httpStatus, $targetBody, $displayModuleLower)
 				)
 			));
 		} catch (\Throwable $e) {
@@ -1850,7 +1936,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			if (!empty($params['extensions']) && is_array($params['extensions'])) {
 				$resolved = array();
 				foreach (array_slice($params['extensions'], 0, 20) as $v) {
-					$name = $this->resolveNumericObjectId($moduleLower, (string) $v);
+					$name = $this->resolveObjectId($moduleLower, (string) $v);
 					$resolved[] = $this->truncate($name, 128);
 				}
 				$payload['target_ids'] = $resolved;
@@ -1863,7 +1949,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			}
 			if (!empty($params['id'])) {
 				$payload['target_id'] = $this->truncate(
-					$this->resolveNumericObjectId($moduleLower, (string) $params['id']),
+					$this->resolveObjectId($moduleLower, (string) $params['id']),
 					256
 				);
 			}

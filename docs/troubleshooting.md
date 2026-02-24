@@ -218,3 +218,20 @@ during a database outage are lost.
 
 No. All sensitive fields (passwords, tokens, API keys, private keys, PINs) are replaced
 with `***REDACTED***` before persistence. See [Data Classification](data-classification-redaction.md).
+
+### Q: Delete events show a numeric ID instead of the entity name
+
+The module caches entity ID-to-name mappings when an admin views a module page. If the
+admin deletes an entity via a direct URL without first viewing the page, the session cache
+may be empty and the raw ID will be displayed. This is a graceful fallback. Modules covered
+by the entity name cache: Userman, IVR, Time Conditions, Announcements, Trunks, Contact
+Manager, Certman, Backup, and Calendar. Extensions, Ring Groups, Queues, and Conferences
+use their extension/room numbers which are already meaningful.
+
+### Q: How do I distinguish create events from edit events?
+
+POST events that use a generic action (`update`, `save`, `submit`) and have no prior audit
+baseline for that object are automatically labeled `create`. Module-specific action names
+like `addgrp` (Ring Groups) or `addtrunk` (Trunks) are preserved as-is. Edit events for
+objects that already have a baseline retain their original action name and show a before/after
+diff in the change payload.
