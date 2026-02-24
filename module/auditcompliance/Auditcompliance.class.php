@@ -200,8 +200,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		if ($method === 'post') {
 			$this->captureGuiPostEvent($sessionId, $display);
-		} elseif ($method === 'get' && isset(self::SENSITIVE_READ_PAGES[$displayLower])) {
-			$this->captureSensitiveReadEvent($sessionId, $display, $displayLower);
+		} elseif ($method === 'get') {
+			$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
+			if ($this->isStateChangingAction($action)) {
+				$this->captureGuiGetActionEvent($sessionId, $display, $action);
+			} elseif (isset(self::SENSITIVE_READ_PAGES[$displayLower])) {
+				$this->captureSensitiveReadEvent($sessionId, $display, $displayLower);
+			}
 		}
 	}
 
@@ -229,6 +234,56 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$this->debugLog('GUI audit write failed', array(
 				'error' => $e->getMessage(),
 				'display' => (string) $display
+			));
+		}
+	}
+
+	private static $STATE_CHANGING_PREFIXES = array(
+		'del', 'delete', 'remove', 'add', 'edit', 'edt', 'update', 'save',
+		'create', 'modify', 'enable', 'disable', 'toggle', 'reset'
+	);
+
+	private function isStateChangingAction($action) {
+		if ($action === '') {
+			return false;
+		}
+		foreach (self::$STATE_CHANGING_PREFIXES as $prefix) {
+			if (strpos($action, $prefix) === 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private function captureGuiGetActionEvent($sessionId, $display, $action) {
+		try {
+			$objectId = $this->detectObjectId();
+			$this->routeEvent(array(
+				'session_id' => $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'gui',
+				'module_name' => (string) $display,
+				'action' => $action,
+				'outcome' => 'success',
+				'route' => (string) $display,
+				'object_type' => $this->detectObjectType($display),
+				'object_id' => $objectId,
+				'request_method' => 'GET',
+				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+				'request_hash' => $this->hashRequest($_REQUEST),
+				'change' => array(
+					'before' => null,
+					'after' => null,
+					'added' => array(),
+					'removed' => array(),
+					'changed' => array('action' => $action, 'object_id' => $objectId)
+				)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('GUI GET action audit failed', array(
+				'error' => $e->getMessage(),
+				'display' => (string) $display,
+				'action' => $action
 			));
 		}
 	}
@@ -1756,7 +1811,7 @@ JSEOF;
 		return array(
 			'before' => null,
 			'after' => $filtered,
-			'added' => array(),
+			'added' => $filtered,
 			'removed' => array(),
 			'changed' => array()
 		);
@@ -1800,7 +1855,7 @@ JSEOF;
 			if ($row && !empty($row['change_after'])) {
 				$decoded = @json_decode($row['change_after'], true);
 				if (is_array($decoded) && !empty($decoded)) {
-					return $decoded;
+					return $this->filterNoiseKeys($decoded);
 				}
 			}
 		} catch (\Throwable $e) {
