@@ -294,7 +294,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 					'announcement_id', 'callrecording_id', 'channel',
-					'orig_account', 'trunknum',
+					'orig_account', 'trunknum', 'user',
 					'username', 'displayname', 'name',
 				);
 				foreach ($candidates as $key) {
@@ -467,6 +467,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private function captureSensitiveReadEvent($sessionId, $display, $displayLower) {
 		try {
+			$objectId = $this->detectObjectId();
+			$objectId = $this->resolveNumericObjectId($displayLower, $objectId);
+
 			$readType = self::SENSITIVE_READ_PAGES[$displayLower];
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
@@ -477,7 +480,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'outcome' => 'success',
 				'route' => (string) $display,
 				'object_type' => $this->detectObjectType($display),
-				'object_id' => $this->detectObjectId(),
+				'object_id' => $objectId,
 				'request_method' => 'GET',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
 				'request_hash' => '',
@@ -487,12 +490,63 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'changed' => array('view' => $readType)
 				)
 			));
+
+			$this->cacheModuleEntityNames($displayLower);
 		} catch (\Throwable $e) {
 			$this->debugLog('Sensitive read audit failed', array(
 				'error' => $e->getMessage(),
 				'display' => (string) $display
 			));
 		}
+	}
+
+	private const SESSION_KEY_ENTITY_NAMES = 'auditcompliance_entity_names';
+
+	/**
+	 * Caches entity ID-to-name mappings in the PHP session for modules where
+	 * AJAX operations (e.g. delete) only send numeric IDs. The cache is
+	 * populated when the user views the module page (sensitive read) and
+	 * consumed when a subsequent AJAX event needs to resolve an ID to a name.
+	 */
+	private function cacheModuleEntityNames($moduleLower) {
+		try {
+			$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
+
+			if ($moduleLower === 'userman') {
+				$users = $this->FreePBX->Userman->getAllUsers();
+				$map = array();
+				if (is_array($users)) {
+					foreach ($users as $u) {
+						$id = (string) ($u['id'] ?? '');
+						$uname = (string) ($u['username'] ?? '');
+						if ($id !== '' && $uname !== '') {
+							$map[$id] = $uname;
+						}
+					}
+				}
+				$cache['userman'] = $map;
+			}
+
+			$_SESSION[self::SESSION_KEY_ENTITY_NAMES] = $cache;
+		} catch (\Throwable $e) {
+			// Non-critical; caching failure should not break audit
+		}
+	}
+
+	/**
+	 * Resolves a numeric object ID to a human-readable name using the session
+	 * cache populated by cacheModuleEntityNames(). Falls back to the original
+	 * ID if no cached name is available.
+	 */
+	private function resolveNumericObjectId($moduleLower, $objectId) {
+		if ($objectId === '' || !ctype_digit((string) $objectId)) {
+			return $objectId;
+		}
+		$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
+		if (isset($cache[$moduleLower][(string) $objectId])) {
+			return $cache[$moduleLower][(string) $objectId];
+		}
+		return $objectId;
 	}
 
 	public function getRightNav($request) {
@@ -1604,6 +1658,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		$displayModule = $this->normalizeAjaxModuleName($targetModule, $targetCommand, $targetBody);
 		$objectId = $this->extractObjectIdFromAjaxBody($targetBody, $targetUrl);
+		$objectId = $this->resolveNumericObjectId(strtolower($targetModule), $objectId);
 
 		try {
 			$this->routeEvent(array(
@@ -1623,7 +1678,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'added' => array(), 'removed' => array(),
 					'changed' => $isApplyConfig
 						? array('action' => 'apply_config', 'description' => 'Administrator applied configuration changes to Asterisk')
-						: $this->buildAjaxChangePayload($targetCommand, $httpStatus, $targetBody)
+						: $this->buildAjaxChangePayload($targetCommand, $httpStatus, $targetBody, strtolower($targetModule))
 				)
 			));
 		} catch (\Throwable $e) {
@@ -1745,8 +1800,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	/**
 	 * Builds a richer change payload for AJAX events by extracting
 	 * identifiers and type info from the intercepted POST body.
+	 * Resolves numeric IDs to names using the session entity cache.
 	 */
-	private function buildAjaxChangePayload($command, $httpStatus, $body) {
+	private function buildAjaxChangePayload($command, $httpStatus, $body, $moduleLower = '') {
 		$payload = array('command' => $command, 'http_status' => $httpStatus);
 		if ($body !== '') {
 			parse_str($body, $params);
@@ -1754,9 +1810,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				$payload['type'] = $this->truncate((string) $params['type'], 128);
 			}
 			if (!empty($params['extensions']) && is_array($params['extensions'])) {
-				$payload['target_ids'] = array_map(function ($v) {
-					return $this->truncate((string) $v, 128);
-				}, array_slice($params['extensions'], 0, 20));
+				$resolved = array();
+				foreach (array_slice($params['extensions'], 0, 20) as $v) {
+					$name = $this->resolveNumericObjectId($moduleLower, (string) $v);
+					$resolved[] = $this->truncate($name, 128);
+				}
+				$payload['target_ids'] = $resolved;
 			}
 			if (!empty($params['name'])) {
 				$payload['name'] = $this->truncate((string) $params['name'], 256);
@@ -1765,7 +1824,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				$payload['username'] = $this->truncate((string) $params['username'], 256);
 			}
 			if (!empty($params['id'])) {
-				$payload['target_id'] = $this->truncate((string) $params['id'], 256);
+				$payload['target_id'] = $this->truncate(
+					$this->resolveNumericObjectId($moduleLower, (string) $params['id']),
+					256
+				);
 			}
 		}
 		return $this->redactSensitiveData($payload);
@@ -3258,7 +3320,7 @@ JSEOF;
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
-			'orig_account', 'trunknum',
+			'orig_account', 'trunknum', 'user',
 			'username', 'displayname', 'name',
 		);
 		foreach ($candidates as $key) {
