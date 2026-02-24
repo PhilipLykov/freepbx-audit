@@ -68,10 +68,33 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'getjson',
 		),
 		'contactmanager' => array(
-			'sdgrid', 'grid', 'lookup',
+			'sdgrid', 'grid', 'lookup', 'image', 'limage',
+			'favorite_list', 'getgravatar', 'checksd',
 		),
 		'backup' => array(
 			'getbackup', 'getbackups', 'getstorage',
+			'backupgrid', 'backupitems', 'backupstorage',
+			'backupstatus', 'restorestatus',
+			'localrestorefiles', 'restorefiles',
+			'localdownload', 'remotedownload',
+			'getrestorelog', 'checkchansip',
+		),
+		'calendar' => array(
+			'grid', 'events', 'groupsgrid', 'groupeventshtml',
+			'getcaldavcals', 'getewscals', 'duplicate', 'checkical',
+			'oauthsettings', 'oauthlistcalendars', 'ical',
+		),
+		'ivr' => array(
+			'getjson',
+		),
+		'timeconditions' => array(
+			'getgroups', 'getjson',
+		),
+		'announcement' => array(
+			'getdata', 'getjson',
+		),
+		'certman' => array(
+			'getjson',
 		),
 		'dashboard' => array(
 			'getcontent', 'getnotifications',
@@ -294,8 +317,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 					'announcement_id', 'callrecording_id', 'channel',
-					'orig_account', 'trunknum', 'user',
-					'username', 'displayname', 'name',
+					'orig_account', 'trunknum', 'trunkid', 'user',
+					'group', 'entry', 'list_id', 'entryid',
+					'cid', 'caid', 'csrref', 'fileid',
+					'calendarid', 'eventid',
+					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
 					if (!empty($requestSnapshot[$key])) {
@@ -1697,26 +1723,35 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 * so the audit log reads e.g. "extensions / delete" instead of "core / delete".
 	 */
 	private function normalizeAjaxModuleName($module, $command, $body) {
-		if (strtolower($module) !== 'core' || $body === '') {
-			return $module;
-		}
-		parse_str($body, $params);
-		$type = strtolower(trim((string) ($params['type'] ?? '')));
-
-		$typeToModule = array(
-			'extensions' => 'extensions',
-			'extension' => 'extensions',
-			'users' => 'users',
-			'devices' => 'devices',
-		);
-
-		if (isset($typeToModule[$type])) {
-			return $typeToModule[$type];
-		}
-
+		$moduleLower = strtolower($module);
 		$commandLower = strtolower($command);
-		if (strpos($commandLower, 'route') !== false || strpos($commandLower, 'trunk') !== false) {
-			return $commandLower === 'updatetrunks' ? 'trunks' : 'routing';
+
+		if ($moduleLower === 'core') {
+			if ($body !== '') {
+				parse_str($body, $params);
+				$type = strtolower(trim((string) ($params['type'] ?? '')));
+				$typeToModule = array(
+					'extensions' => 'extensions',
+					'extension' => 'extensions',
+					'users' => 'users',
+					'devices' => 'devices',
+				);
+				if (isset($typeToModule[$type])) {
+					return $typeToModule[$type];
+				}
+			}
+			if ($commandLower === 'quickcreate') {
+				return 'extensions';
+			}
+			if ($commandLower === 'updatetrunks') {
+				return 'trunks';
+			}
+			if (in_array($commandLower, array('updateroutes', 'delroute'), true)) {
+				return 'routing';
+			}
+			if (in_array($commandLower, array('deletechansipdetails', 'addastmodule', 'delastmodule'), true)) {
+				return 'core';
+			}
 		}
 
 		return $module;
@@ -1765,6 +1800,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
+			'group', 'entry', 'list_id', 'entryid',
+			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
+			'route_id', 'trunknum', 'file',
 			'name', 'username',
 		);
 
@@ -3320,8 +3358,11 @@ JSEOF;
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
-			'orig_account', 'trunknum', 'user',
-			'username', 'displayname', 'name',
+			'orig_account', 'trunknum', 'trunkid', 'user',
+			'group', 'entry', 'list_id', 'entryid',
+			'cid', 'caid', 'csrref', 'fileid',
+			'calendarid', 'eventid',
+			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {
 			if (!empty($_REQUEST[$key])) {
