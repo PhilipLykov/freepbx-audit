@@ -29,6 +29,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'voicemail' => 'voicemail_access',
 		'conferences' => 'conference_pin_access',
 		'pinsets' => 'pin_credentials_access',
+		'disa' => 'disa_pin_access',
 		'contactmanager' => 'contact_data_access',
 		'phonebook' => 'phonebook_personal_access',
 		'logfiles' => 'system_log_access',
@@ -321,7 +322,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 					'announcement_id', 'callrecording_id', 'channel',
-					'orig_account', 'trunknum', 'trunkid', 'user',
+					'orig_account', 'trunknum', 'user',
 					'group', 'entry', 'list_id', 'entryid',
 					'cid', 'caid', 'csrref', 'fileid',
 					'calendarid', 'eventid',
@@ -344,8 +345,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'added' => array(), 'removed' => array(),
 					'changed' => array('action' => $action, 'object_id' => $objectId)
 				);
-			if ($serverSnapshot['REQUEST_METHOD'] === 'POST' && !empty($requestSnapshot)) {
-				try {
+				if ($serverSnapshot['REQUEST_METHOD'] === 'POST' && !empty($requestSnapshot)) {
+					try {
 						$previousPost = $self->getPreviousPostData($display, $objectId);
 						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
 						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)) {
@@ -3182,7 +3183,6 @@ JSEOF;
 	private function parseSettingsInput(array $input, $persist = false) {
 		$dsn = trim((string) ($input['audit_db_dsn'] ?? ''));
 		$user = trim((string) ($input['audit_db_user'] ?? ''));
-		$keepCurrentPassword = !empty($input['keep_current_password']);
 		$providedPassword = (string) ($input['audit_db_password'] ?? '');
 		$requireTls = !empty($input['audit_db_require_tls']) ? '1' : '0';
 		$requireExternal = !empty($input['audit_require_external_db']) ? '1' : '0';
@@ -3583,7 +3583,7 @@ JSEOF;
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
-			'orig_account', 'trunknum', 'trunkid', 'user',
+			'orig_account', 'trunknum', 'user',
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'csrref', 'fileid',
 			'calendarid', 'eventid',

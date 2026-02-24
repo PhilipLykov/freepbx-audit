@@ -407,9 +407,11 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 						<?php
 							$phase = (string) ($event['session_phase'] ?? 'activity');
 							$isBoundary = in_array($phase, array('login', 'logout', 'timeout', 'failure'), true);
-							$dotClass = 'dot-' . $phase;
-							$liClass = $isBoundary ? ('audit-evt-boundary boundary-' . $phase) : '';
-							$chClass = 'ch-' . ($event['channel'] ?? 'gui');
+							$phaseSafe = preg_replace('/[^a-z0-9_-]/', '', $phase);
+							$channelSafe = preg_replace('/[^a-z0-9_-]/', '', strtolower((string) ($event['channel'] ?? 'gui')));
+							$dotClass = 'dot-' . $phaseSafe;
+							$liClass = $isBoundary ? ('audit-evt-boundary boundary-' . $phaseSafe) : '';
+							$chClass = 'ch-' . $channelSafe;
 							$outClass = ($event['outcome'] ?? 'success') === 'success' ? 'outcome-ok' : 'outcome-fail';
 							$hasChanges = false;
 							$changeChanged = null;
