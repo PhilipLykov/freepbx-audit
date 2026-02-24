@@ -25,21 +25,21 @@ if ($view === 'settings' && strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? '
 			'message' => _('Access denied. Settings management requires administrator privileges.')
 		);
 	} else {
-	$submittedCsrf = (string) ($_POST['auditcompliance_csrf'] ?? '');
-	$sessionCsrf = (string) ($_SESSION[$csrfSessionKey] ?? '');
-	if ($submittedCsrf === '' || $sessionCsrf === '' || !hash_equals($sessionCsrf, $submittedCsrf)) {
-		$settingsNotice = array(
-			'status' => false,
-			'message' => _('Security token validation failed. Refresh the page and try again.')
-		);
-	} else {
-		$action = (string) ($_POST['settings_action'] ?? 'save');
-		if ($action === 'test') {
-			$settingsNotice = FreePBX::Auditcompliance()->testSettingsConnectionFromUi($_POST);
+		$submittedCsrf = (string) ($_POST['auditcompliance_csrf'] ?? '');
+		$sessionCsrf = (string) ($_SESSION[$csrfSessionKey] ?? '');
+		if ($submittedCsrf === '' || $sessionCsrf === '' || !hash_equals($sessionCsrf, $submittedCsrf)) {
+			$settingsNotice = array(
+				'status' => false,
+				'message' => _('Security token validation failed. Refresh the page and try again.')
+			);
 		} else {
-			$settingsNotice = FreePBX::Auditcompliance()->saveSettingsFromUi($_POST);
+			$action = (string) ($_POST['settings_action'] ?? 'save');
+			if ($action === 'test') {
+				$settingsNotice = FreePBX::Auditcompliance()->testSettingsConnectionFromUi($_POST);
+			} else {
+				$settingsNotice = FreePBX::Auditcompliance()->saveSettingsFromUi($_POST);
+			}
 		}
-	}
 	}
 }
 

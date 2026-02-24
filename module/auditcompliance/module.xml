@@ -64,7 +64,7 @@
 			<method callingMethod="addGroup" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_addGroup</method>
 			<method callingMethod="updateGroup" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_updateGroup</method>
 			<method callingMethod="deleteGroupByID" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_deleteGroupByID</method>
-			<method callingMethod="addEntry" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_addEntry</method>
+			<method callingMethod="addEntryByGroupID" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_addEntryByGroupID</method>
 			<method callingMethod="updateEntry" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_updateEntry</method>
 			<method callingMethod="deleteEntryByID" class="Auditcompliance" namespace="FreePBX\modules">hookContactmanager_deleteEntryByID</method>
 		</contactmanager>

@@ -25,12 +25,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'filestore' => 'storage_credentials_access',
 		'xmpp' => 'xmpp_credentials_access',
 		'calendar' => 'calendar_credentials_access',
+		'calendargroups' => 'calendar_credentials_access',
 		'voicemail' => 'voicemail_access',
 		'conferences' => 'conference_pin_access',
 		'pinsets' => 'pin_credentials_access',
 		'contactmanager' => 'contact_data_access',
 		'phonebook' => 'phonebook_personal_access',
 		'logfiles' => 'system_log_access',
+		'logfiles_settings' => 'system_log_access',
 		'superfecta' => 'callerid_config_access'
 	);
 
@@ -80,9 +82,6 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'voicemail' => array(
 			array('class' => 'Voicemail', 'methods' => array('getVoicemailBoxByExtension', 'getMailbox')),
 		),
-		'sipsettings' => array(
-			array('class' => 'Sipsettings', 'methods' => array('getConfig')),
-		),
 		'certman' => array(
 			array('class' => 'Certman', 'methods' => array('getCertificateDetails')),
 		),
@@ -106,6 +105,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private $auditScriptsInjected = false;
 	private $resolvedDriver = null;
 	private $lastStorageErrorMessage = '';
+	private $eventCapturedThisRequest = false;
 
 	public function __construct($freepbx = null) {
 		if ($freepbx === null) {
@@ -169,6 +169,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 * 4. Records sensitive-read events for GET requests on designated pages.
 	 */
 	public function doConfigPageInit($display) {
+		$this->eventCapturedThisRequest = false;
 		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
 			return;
 		}
@@ -197,17 +198,90 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		$method = strtolower((string) ($_SERVER['REQUEST_METHOD'] ?? ''));
 		$displayLower = strtolower((string) $display);
+		$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
+
+		if ($this->isStateChangingAction($action)) {
+			$this->registerShutdownCapture($sessionId, $display, $action, $method);
+		}
 
 		if ($method === 'post') {
 			$this->captureGuiPostEvent($sessionId, $display);
 		} elseif ($method === 'get') {
-			$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
 			if ($this->isStateChangingAction($action)) {
 				$this->captureGuiGetActionEvent($sessionId, $display, $action);
 			} elseif (isset(self::SENSITIVE_READ_PAGES[$displayLower])) {
 				$this->captureSensitiveReadEvent($sessionId, $display, $displayLower);
 			}
 		}
+	}
+
+	/**
+	 * Safety net for modules that call redirect_standard() or exit() in their
+	 * doConfigPageInit before our hook fires (e.g. trunks, miscdests).
+	 * register_shutdown_function runs even after exit().
+	 */
+	private function registerShutdownCapture($sessionId, $display, $action, $method = 'post') {
+		$self = $this;
+		$requestSnapshot = $_REQUEST;
+		$serverSnapshot = array(
+			'REQUEST_METHOD' => strtoupper($method),
+			'REQUEST_URI' => $_SERVER['REQUEST_URI'] ?? ''
+		);
+		register_shutdown_function(function () use ($self, $sessionId, $display, $action, $requestSnapshot, $serverSnapshot) {
+			if ($self->eventCapturedThisRequest) {
+				return;
+			}
+			try {
+				$objectId = '';
+				$candidates = array(
+					'id', 'extdisplay', 'account', 'trunkid', 'user_id',
+					'itemid', 'group_id', 'entry_id', 'queue', 'grpnum',
+					'ext', 'extension', 'cidnum', 'backup_id', 'tcid',
+					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
+					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
+					'announcement_id', 'callrecording_id', 'channel',
+					'orig_account', 'trunknum'
+				);
+				foreach ($candidates as $key) {
+					if (!empty($requestSnapshot[$key])) {
+						$objectId = (string) $requestSnapshot[$key];
+						break;
+					}
+				}
+
+				$changePayload = array(
+					'before' => null, 'after' => null,
+					'added' => array(), 'removed' => array(),
+					'changed' => array('action' => $action, 'object_id' => $objectId)
+				);
+				if ($serverSnapshot['REQUEST_METHOD'] === 'POST' && !empty($requestSnapshot)) {
+					try {
+						$previousPost = $self->getPreviousPostData($display, $objectId);
+						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
+					} catch (\Throwable $diffErr) {
+						// Fall back to generic payload
+					}
+				}
+
+				$self->routeEvent(array(
+					'session_id' => $sessionId,
+					'session_phase' => 'activity',
+					'channel' => 'gui',
+					'module_name' => (string) $display,
+					'action' => $action,
+					'outcome' => 'success',
+					'route' => (string) $display,
+					'object_type' => strtolower((string) $display),
+					'object_id' => $objectId,
+					'request_method' => $serverSnapshot['REQUEST_METHOD'],
+					'request_uri' => $serverSnapshot['REQUEST_URI'],
+					'request_hash' => md5(serialize($requestSnapshot)),
+					'change' => $changePayload
+				));
+			} catch (\Throwable $e) {
+				// Silent — shutdown context
+			}
+		});
 	}
 
 	private function captureGuiPostEvent($sessionId, $display) {
@@ -230,6 +304,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'request_hash' => $this->hashRequest($_REQUEST),
 				'change' => $this->buildChangePayload($_REQUEST, $previousPost)
 			));
+			$this->eventCapturedThisRequest = true;
 		} catch (\Throwable $e) {
 			$this->debugLog('GUI audit write failed', array(
 				'error' => $e->getMessage(),
@@ -240,7 +315,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private static $STATE_CHANGING_PREFIXES = array(
 		'del', 'delete', 'remove', 'add', 'edit', 'edt', 'update', 'save',
-		'create', 'modify', 'enable', 'disable', 'toggle', 'reset'
+		'create', 'modify', 'enable', 'disable', 'toggle', 'reset',
+		'copy', 'duplicate', 'submit'
 	);
 
 	private function isStateChangingAction($action) {
@@ -279,6 +355,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'changed' => array('action' => $action, 'object_id' => $objectId)
 				)
 			));
+			$this->eventCapturedThisRequest = true;
 		} catch (\Throwable $e) {
 			$this->debugLog('GUI GET action audit failed', array(
 				'error' => $e->getMessage(),
@@ -687,8 +764,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$this->captureHookEvent('contactmanager', 'deleteGroupByID', ...func_get_args());
 	}
 
-	public function hookContactmanager_addEntry() {
-		$this->captureHookEvent('contactmanager', 'addEntry', ...func_get_args());
+	public function hookContactmanager_addEntryByGroupID() {
+		$this->captureHookEvent('contactmanager', 'addEntryByGroupID', ...func_get_args());
 	}
 
 	public function hookContactmanager_updateEntry() {
@@ -1120,70 +1197,70 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$where = array();
 			$params = array();
 
-		if (!empty($filters['actor'])) {
-			$where[] = "e.actor = ?";
-			$params[] = (string) $filters['actor'];
-		}
-		if (!empty($filters['module_name'])) {
-			$where[] = "e.module_name = ?";
-			$params[] = (string) $filters['module_name'];
-		}
-		if (!empty($filters['action'])) {
-			$where[] = "e.action = ?";
-			$params[] = (string) $filters['action'];
-		}
-		if (!empty($filters['channel'])) {
-			$where[] = "e.channel = ?";
-			$params[] = (string) $filters['channel'];
-		}
-		if (!empty($filters['outcome'])) {
-			$where[] = "e.outcome = ?";
-			$params[] = (string) $filters['outcome'];
-		}
-		if (!empty($filters['source_ip'])) {
-			$where[] = "e.source_ip = ?";
-			$params[] = (string) $filters['source_ip'];
-		}
-		if (!empty($filters['session_phase'])) {
-			$where[] = "e.session_phase = ?";
-			$params[] = (string) $filters['session_phase'];
-		}
-		if (!empty($filters['date_from_unix'])) {
-			$where[] = "e.occurred_at_unix >= ?";
-			$params[] = (int) $filters['date_from_unix'];
-		}
-		if (!empty($filters['date_to_unix'])) {
-			$where[] = "e.occurred_at_unix <= ?";
-			$params[] = (int) $filters['date_to_unix'];
-		}
-		if (!empty($filters['search_text'])) {
-			$term = '%' . str_replace(array('!', '%', '_'), array('!!', '!%', '!_'), (string) $filters['search_text']) . '%';
-			$likeEscape = " ESCAPE '!'";
-			$where[] = "(e.module_name LIKE ?" . $likeEscape . " OR e.action LIKE ?" . $likeEscape . " OR e.actor LIKE ?" . $likeEscape . " OR e.object_type LIKE ?" . $likeEscape . " OR e.object_id LIKE ?" . $likeEscape . ")";
-			$params[] = $term;
-			$params[] = $term;
-			$params[] = $term;
-			$params[] = $term;
-			$params[] = $term;
-		}
+			if (!empty($filters['actor'])) {
+				$where[] = "e.actor = ?";
+				$params[] = (string) $filters['actor'];
+			}
+			if (!empty($filters['module_name'])) {
+				$where[] = "e.module_name = ?";
+				$params[] = (string) $filters['module_name'];
+			}
+			if (!empty($filters['action'])) {
+				$where[] = "e.action = ?";
+				$params[] = (string) $filters['action'];
+			}
+			if (!empty($filters['channel'])) {
+				$where[] = "e.channel = ?";
+				$params[] = (string) $filters['channel'];
+			}
+			if (!empty($filters['outcome'])) {
+				$where[] = "e.outcome = ?";
+				$params[] = (string) $filters['outcome'];
+			}
+			if (!empty($filters['source_ip'])) {
+				$where[] = "e.source_ip = ?";
+				$params[] = (string) $filters['source_ip'];
+			}
+			if (!empty($filters['session_phase'])) {
+				$where[] = "e.session_phase = ?";
+				$params[] = (string) $filters['session_phase'];
+			}
+			if (!empty($filters['date_from_unix'])) {
+				$where[] = "e.occurred_at_unix >= ?";
+				$params[] = (int) $filters['date_from_unix'];
+			}
+			if (!empty($filters['date_to_unix'])) {
+				$where[] = "e.occurred_at_unix <= ?";
+				$params[] = (int) $filters['date_to_unix'];
+			}
+			if (!empty($filters['search_text'])) {
+				$term = '%' . str_replace(array('!', '%', '_'), array('!!', '!%', '!_'), (string) $filters['search_text']) . '%';
+				$likeEscape = " ESCAPE '!'";
+				$where[] = "(e.module_name LIKE ?" . $likeEscape . " OR e.action LIKE ?" . $likeEscape . " OR e.actor LIKE ?" . $likeEscape . " OR e.object_type LIKE ?" . $likeEscape . " OR e.object_id LIKE ?" . $likeEscape . ")";
+				$params[] = $term;
+				$params[] = $term;
+				$params[] = $term;
+				$params[] = $term;
+				$params[] = $term;
+			}
 
-		$allowedSort = array('occurred_at_unix', 'actor', 'module_name', 'action', 'channel');
-		$sortField = 'occurred_at_unix';
-		if (!empty($filters['sort']) && in_array($filters['sort'], $allowedSort, true)) {
-			$sortField = $filters['sort'];
-		}
-		$sortDir = (!empty($filters['sort_dir']) && strtoupper($filters['sort_dir']) === 'ASC') ? 'ASC' : 'DESC';
+			$allowedSort = array('occurred_at_unix', 'actor', 'module_name', 'action', 'channel');
+			$sortField = 'occurred_at_unix';
+			if (!empty($filters['sort']) && in_array($filters['sort'], $allowedSort, true)) {
+				$sortField = $filters['sort'];
+			}
+			$sortDir = (!empty($filters['sort_dir']) && strtoupper($filters['sort_dir']) === 'ASC') ? 'ASC' : 'DESC';
 
-		$sql = "SELECT e.event_id, e.session_id, e.session_phase, e.channel, e.module_name, e.action,
-			e.outcome, e.route, e.object_type, e.object_id, e.actor, e.source_ip,
-			e.request_method, e.request_uri, e.change_before, e.change_after,
-			e.change_added, e.change_removed, e.change_changed,
-			e.occurred_at_unix, e.occurred_at_utc, e.occurred_at_local
-			FROM audit_events e";
-		if (!empty($where)) {
-			$sql .= " WHERE " . implode(" AND ", $where);
-		}
-		$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
+			$sql = "SELECT e.event_id, e.session_id, e.session_phase, e.channel, e.module_name, e.action,
+				e.outcome, e.route, e.object_type, e.object_id, e.actor, e.source_ip,
+				e.request_method, e.request_uri, e.change_before, e.change_after,
+				e.change_added, e.change_removed, e.change_changed,
+				e.occurred_at_unix, e.occurred_at_utc, e.occurred_at_local
+				FROM audit_events e";
+			if (!empty($where)) {
+				$sql .= " WHERE " . implode(" AND ", $where);
+			}
+			$sql .= " ORDER BY e." . $sortField . " " . $sortDir . " LIMIT " . (int) $limit . " OFFSET " . (int) $offset;
 
 			$sth = $pdo->prepare($sql);
 			$sth->execute($params);
@@ -1946,7 +2023,9 @@ JSEOF;
 	private static $DIFF_SKIP_KEYS = array(
 		'display', 'action', 'Submit', 'submit', 'view', 'extdisplay',
 		'fw_popover_process', 'fw_popover', 'nonce', 'fw_csrf_token',
-		'goto0', 'goto1', 'goto2'
+		'goto0', 'goto1', 'goto2',
+		'delete', 'tech', 'orig_account', 'entries',
+		'__csrf_token', 'fw_csrf', 'module_hook'
 	);
 
 	/**
@@ -2926,8 +3005,10 @@ JSEOF;
 			'id', 'extdisplay', 'account', 'trunkid', 'user_id',
 			'itemid', 'group_id', 'entry_id', 'queue', 'grpnum',
 			'ext', 'extension', 'cidnum', 'backup_id', 'tcid',
-			'tgid', 'confno', 'pagegrp', 'rg', 'ivr_id',
-			'faxid', 'calendar_id', 'pinsets_id', 'scheme'
+			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
+			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
+			'announcement_id', 'callrecording_id', 'channel',
+			'orig_account', 'trunknum'
 		);
 		foreach ($candidates as $key) {
 			if (!empty($_REQUEST[$key])) {
