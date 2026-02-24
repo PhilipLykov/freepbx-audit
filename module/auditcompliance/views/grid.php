@@ -412,14 +412,12 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 							$chClass = 'ch-' . ($event['channel'] ?? 'gui');
 							$outClass = ($event['outcome'] ?? 'success') === 'success' ? 'outcome-ok' : 'outcome-fail';
 							$hasChanges = false;
-							$changeBefore = null;
 							$changeChanged = null;
 							$changeAdded = null;
 							if (!$isBoundary) {
-								$changeBefore = (!empty($event['change_before']) && $event['change_before'] !== '{}' && $event['change_before'] !== 'null') ? $event['change_before'] : null;
 								$changeChanged = (!empty($event['change_changed']) && $event['change_changed'] !== '{}' && $event['change_changed'] !== '[]') ? $event['change_changed'] : null;
 								$changeAdded = (!empty($event['change_added']) && $event['change_added'] !== '{}' && $event['change_added'] !== '[]') ? $event['change_added'] : null;
-								$hasChanges = ($changeBefore !== null || $changeChanged !== null || $changeAdded !== null);
+								$hasChanges = ($changeChanged !== null || $changeAdded !== null);
 							}
 							$evtUnique = $idx . '_' . $evtIdx;
 						?>
@@ -450,7 +448,6 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 						<?php if ($hasChanges): ?>
 						<li class="audit-evt-changes" data-evt-detail="<?php echo $evtUnique; ?>">
 							<?php
-								$beforeArr = $changeBefore ? @json_decode($changeBefore, true) : null;
 								$changedArr = $changeChanged ? @json_decode($changeChanged, true) : null;
 								$addedArr = $changeAdded ? @json_decode($changeAdded, true) : null;
 							?>
@@ -473,18 +470,11 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 											<?php endif; ?>
 										<?php endforeach; ?>
 									</table>
-								<?php else: ?>
-									<div class="audit-change-section-title"><i class="fa fa-pencil" style="color:#e67e22;"></i> Submitted Data</div>
-									<div class="audit-change-json"><?php echo $esc(json_encode($changedArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
 								<?php endif; ?>
 							<?php endif; ?>
 							<?php if (is_array($addedArr) && !empty($addedArr)): ?>
 								<div class="audit-change-section-title"><i class="fa fa-plus" style="color:#27ae60;"></i> Added</div>
 								<div class="audit-change-json"><?php echo $esc(json_encode($addedArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
-							<?php endif; ?>
-							<?php if (is_array($beforeArr) && !empty($beforeArr)): ?>
-								<div class="audit-change-section-title"><i class="fa fa-history" style="color:#2980b9;"></i> State Before Change</div>
-								<div class="audit-change-json"><?php echo $esc(json_encode($beforeArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
 							<?php endif; ?>
 						</li>
 						<?php endif; ?>

@@ -595,7 +595,6 @@ $preset = $request['preset'] ?? '';
 		var hasChanges = false;
 		var changesHtml = '';
 		if (r.change_changed && r.change_changed !== '{}' && r.change_changed !== '[]') {
-			hasChanges = true;
 			var changedObj = tryParseJson(r.change_changed);
 			var hasDiff = false;
 			if (changedObj) {
@@ -606,6 +605,7 @@ $preset = $request['preset'] ?? '';
 				}
 			}
 			if (hasDiff) {
+				hasChanges = true;
 				changesHtml += '<span class="change-label change-label-changed"><i class="fa fa-exchange" style="margin-right:4px;"></i>Changed Values:</span>';
 				changesHtml += '<table style="width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:12px;">';
 				changesHtml += '<tr><th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Field</th>';
@@ -623,25 +623,12 @@ $preset = $request['preset'] ?? '';
 					}
 				}
 				changesHtml += '</table>';
-			} else {
-				changesHtml += '<span class="change-label change-label-changed"><i class="fa fa-pencil" style="margin-right:4px;"></i>Submitted Data:</span>';
-				changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_changed) + '</div>';
 			}
 		}
 		if (r.change_added && r.change_added !== '{}' && r.change_added !== '[]') {
 			hasChanges = true;
 			changesHtml += '<span class="change-label change-label-added"><i class="fa fa-plus" style="margin-right:4px;"></i>Added:</span>';
 			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_added) + '</div>';
-		}
-		if (r.change_removed && r.change_removed !== '{}' && r.change_removed !== '[]') {
-			hasChanges = true;
-			changesHtml += '<span class="change-label change-label-removed"><i class="fa fa-minus" style="margin-right:4px;"></i>Removed:</span>';
-			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_removed) + '</div>';
-		}
-		if (r.change_before && r.change_before !== '{}' && r.change_before !== 'null') {
-			hasChanges = true;
-			changesHtml += '<span class="change-label" style="color:#2980b9;"><i class="fa fa-history" style="margin-right:4px;"></i>State Before Change:</span>';
-			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_before) + '</div>';
 		}
 		if (hasChanges) {
 			html += '<div class="audit-detail-changes">';

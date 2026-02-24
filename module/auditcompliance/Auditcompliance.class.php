@@ -42,28 +42,25 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			array('class' => 'Ivr', 'methods' => array('getDetails')),
 		),
 		'trunks' => array(
-			array('class' => 'Core', 'methods' => array('getTrunk')),
+			array('class' => 'Core', 'methods' => array('getTrunkByID', 'getTrunkDetails')),
 		),
 		'ringgroups' => array(
-			array('class' => 'Core', 'methods' => array('getRingGroup')),
-		),
-		'queues' => array(
-			array('class' => 'Queues', 'methods' => array('getQueue', 'getQueueByExtension')),
+			array('class' => 'Ringgroups', 'methods' => array('get')),
 		),
 		'timeconditions' => array(
-			array('class' => 'Timeconditions', 'methods' => array('getTimecondition')),
+			array('class' => 'Timeconditions', 'methods' => array('getTimeCondition')),
 		),
 		'announcement' => array(
-			array('class' => 'Announcement', 'methods' => array('getAnnouncement')),
+			array('class' => 'Announcement', 'methods' => array('getAnnouncementByID')),
 		),
 		'conferences' => array(
 			array('class' => 'Conferences', 'methods' => array('getConference')),
 		),
 		'parking' => array(
-			array('class' => 'Parking', 'methods' => array('getParking')),
+			array('class' => 'Parking', 'methods' => array('getParkingLotByID')),
 		),
 		'paging' => array(
-			array('class' => 'Paging', 'methods' => array('getPaging')),
+			array('class' => 'Paging', 'methods' => array('getPageGroupById')),
 		),
 		'callrecording' => array(
 			array('class' => 'Callrecording', 'methods' => array('getRecording')),
@@ -72,16 +69,16 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			array('class' => 'Backup', 'methods' => array('getBackup')),
 		),
 		'did' => array(
-			array('class' => 'Core', 'methods' => array('getInboundRoute')),
+			array('class' => 'Core', 'methods' => array('getDID')),
 		),
 		'routing' => array(
-			array('class' => 'Core', 'methods' => array('getOutboundRoute')),
+			array('class' => 'Core', 'methods' => array('getRoute', 'getRouteByID')),
 		),
 		'userman' => array(
 			array('class' => 'Userman', 'methods' => array('getUserByID')),
 		),
 		'voicemail' => array(
-			array('class' => 'Voicemail', 'methods' => array('getVoicemailByExtension')),
+			array('class' => 'Voicemail', 'methods' => array('getVoicemailBoxByExtension', 'getMailbox')),
 		),
 		'sipsettings' => array(
 			array('class' => 'Sipsettings', 'methods' => array('getConfig')),
@@ -1627,6 +1624,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					if(!cmd)cmd=bp.get("command")||"";
 				}
 			}catch(e){}}
+			if(!mod&&cmd==="reload"){mod="framework";cmd="apply_config";}
 			if(mod&&mod!=="auditcompliance"){
 				self.addEventListener("loadend",function(){
 					try{
@@ -1747,8 +1745,8 @@ JSEOF;
 		if ($beforeState !== null && is_array($beforeState)) {
 			$diff = $this->computeChangeDiff($beforeState, $redacted);
 			return array(
-				'before' => $beforeState,
-				'after' => $redacted,
+				'before' => null,
+				'after' => null,
 				'added' => $diff['added'],
 				'removed' => $diff['removed'],
 				'changed' => $diff['changed']
@@ -1756,10 +1754,10 @@ JSEOF;
 		}
 		return array(
 			'before' => null,
-			'after' => $redacted,
+			'after' => null,
 			'added' => array(),
 			'removed' => array(),
-			'changed' => $redacted
+			'changed' => array()
 		);
 	}
 
@@ -1820,7 +1818,7 @@ JSEOF;
 				return null;
 			}
 			$module = $this->FreePBX->$className;
-			foreach (array('getDetails', 'getById', 'getConfig') as $method) {
+			foreach (array('get', 'getDetails', 'getById', 'getConfig') as $method) {
 				if (!method_exists($module, $method)) {
 					continue;
 				}
