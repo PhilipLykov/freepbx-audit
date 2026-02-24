@@ -325,6 +325,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'group', 'entry', 'list_id', 'entryid',
 					'cid', 'caid', 'csrref', 'fileid',
 					'calendarid', 'eventid',
+					'destid', 'custom_exten', 'old_custom_exten',
 					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
@@ -342,12 +343,16 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'added' => array(), 'removed' => array(),
 					'changed' => array('action' => $action, 'object_id' => $objectId)
 				);
-				if ($serverSnapshot['REQUEST_METHOD'] === 'POST' && !empty($requestSnapshot)) {
-					try {
+			if ($serverSnapshot['REQUEST_METHOD'] === 'POST' && !empty($requestSnapshot)) {
+				try {
 						$previousPost = $self->getPreviousPostData($display, $objectId);
 						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
 						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)) {
 							$effectiveAction = 'create';
+						}
+						if ($effectiveAction === 'create' || $effectiveAction === 'add') {
+							$self->cacheModuleEntityNames($displayLower);
+							$objectId = $self->resolveObjectId($displayLower, $objectId);
 						}
 					} catch (\Throwable $diffErr) {
 						// Fall back to generic payload
@@ -387,6 +392,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				$action = 'create';
 			}
 
+			$displayObjectId = $objectId;
+			if ($action === 'create' || $action === 'add') {
+				$displayLower = strtolower((string) $display);
+				$this->cacheModuleEntityNames($displayLower);
+				$displayObjectId = $this->resolveObjectId($displayLower, $objectId);
+			}
+
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -396,7 +408,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'outcome' => 'success',
 				'route' => (string) $display,
 				'object_type' => $this->detectObjectType($display),
-				'object_id' => $objectId,
+				'object_id' => $displayObjectId,
 				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
 				'request_hash' => $this->hashRequest($_REQUEST),
@@ -598,6 +610,16 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'id' => null,
 			'name' => 'name',
 		),
+		'customdests' => array(
+			'method' => array('Customappsreg', 'getAllCustomDests'),
+			'id' => 'destid',
+			'name' => 'description',
+		),
+		'customextens' => array(
+			'method' => array('Customappsreg', 'getAllCustomExtens'),
+			'id' => 'custom_exten',
+			'name' => 'description',
+		),
 	);
 
 	private function cacheModuleEntityNames($moduleLower) {
@@ -645,8 +667,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	}
 
 	/**
-	 * Resolves an opaque object ID (numeric or UUID) to a human-readable name
-	 * using the session cache populated by cacheModuleEntityNames().
+	 * Resolves an opaque object ID (numeric, UUID, or name) to a human-readable
+	 * name using the session cache populated by cacheModuleEntityNames().
+	 * First tries an exact key lookup, then a case-insensitive value scan
+	 * (e.g. typed username "test" resolves to stored "TEST").
 	 * Falls back to the original ID if no cached name is available.
 	 */
 	private function resolveObjectId($moduleLower, $objectId) {
@@ -654,8 +678,18 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			return $objectId;
 		}
 		$cache = $_SESSION[self::SESSION_KEY_ENTITY_NAMES] ?? array();
-		if (isset($cache[$moduleLower][(string) $objectId])) {
-			return $cache[$moduleLower][(string) $objectId];
+		if (!isset($cache[$moduleLower])) {
+			return $objectId;
+		}
+		$moduleCache = $cache[$moduleLower];
+		if (isset($moduleCache[(string) $objectId])) {
+			return $moduleCache[(string) $objectId];
+		}
+		$lower = strtolower($objectId);
+		foreach ($moduleCache as $name) {
+			if (strtolower($name) === $lower) {
+				return $name;
+			}
 		}
 		return $objectId;
 	}
@@ -1901,6 +1935,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
 			'route_id', 'trunknum', 'file',
+			'destid', 'custom_exten', 'old_custom_exten',
 			'name', 'username',
 		);
 
@@ -2341,9 +2376,13 @@ JSEOF;
 		$skipKeys = array_flip(self::$DIFF_SKIP_KEYS);
 		$result = array();
 		foreach ($data as $key => $value) {
-			if (!isset($skipKeys[$key])) {
-				$result[$key] = $value;
+			if (isset($skipKeys[$key])) {
+				continue;
 			}
+			if (preg_match('/^[A-Z].*\d$/', $key)) {
+				continue;
+			}
+			$result[$key] = $value;
 		}
 		return $result;
 	}
@@ -3471,6 +3510,7 @@ JSEOF;
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'csrref', 'fileid',
 			'calendarid', 'eventid',
+			'destid', 'custom_exten', 'old_custom_exten',
 			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {

@@ -10,7 +10,9 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 ### Added
 
 - **Create/delete action clarity** -- POST events that have no prior audit baseline and use a generic action (`update`, `save`, `submit`) are automatically labeled `create`, making entity creation events easily distinguishable from edits.
-- **Entity name resolution for deletes** -- `resolveObjectId()` resolves opaque IDs (numeric or UUID) to human-readable names for GET delete and AJAX delete events. Session-based entity cache (`ENTITY_CACHE_MAP`) covers 9 modules: Userman, IVR, Time Conditions, Announcements, Trunks, Contact Manager, Certman, Backup, and Calendar. Cache is populated on every non-state-changing GET page view.
+- **Entity name resolution for deletes** -- `resolveObjectId()` resolves opaque IDs (numeric or UUID) to human-readable names for GET delete and AJAX delete events. Session-based entity cache (`ENTITY_CACHE_MAP`) covers 11 modules: Userman, IVR, Time Conditions, Announcements, Trunks, Contact Manager, Certman, Backup, Calendar, Custom Destinations, and Custom Extensions. Cache is populated on every non-state-changing GET page view and after create events.
+- **Create-event name resolution** -- POST events labeled `create` or `add` now refresh the entity cache and resolve the object ID to its canonical (DB-stored) name, ensuring consistent naming between create and subsequent delete/edit events.
+- **Destination selector noise filtering** -- `filterNoiseKeys()` now strips FreePBX destination selector fields (e.g., `Announcements0`, `Ring Groups0`, `Extensions0`) by pattern-matching keys that start with an uppercase letter and end with a digit.
 - **Hook noise suppression** -- hooks that fire as internal sub-operations (e.g. `core::addUser`, `core::addDevice`, `contactmanager::addEntryByGroupID` during extension creation) are now suppressed when the primary GUI or AJAX event is already captured. During `config.php` requests hooks are fully suppressed (the GUI channel provides complete change details); during `ajax.php` requests only the first hook per PHP request is recorded.
 - **Cross-channel AJAX dedup** -- `hasRecentHookEventForModule()` prevents the JS AJAX interceptor from recording a duplicate event when a BMO hook has already captured the same operation within the dedup window. Apply Config events are exempted from this check.
 - **Expanded core AJAX read-only list** -- added `getextensiongrid`, `getdevicegrid`, `getusergrid`, `getnpanxxjson`, and `populatenpanxx` to the `AJAX_READ_ONLY_COMMANDS` for the `core` module, verified against FreePBX 17 `Core.class.php` source.
@@ -27,11 +29,11 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - **23 sensitive-read pages** -- added `calendargroups` (`calendar_credentials_access`) and `logfiles_settings` (`system_log_access`) to the sensitive page registry.
 - **Settings GUI** -- full graphical settings page for configuring audit database connection (Direct MySQL/MariaDB, Direct PostgreSQL, ODBC), with connection test, input validation, and CSRF protection.
 - **Apply Config event capture** -- multi-layered detection for FreePBX "Apply Config" button presses, including JavaScript interception of `ajax.php?command=reload`.
-- **Expanded object ID detection** -- `detectObjectId()` now recognizes `pagenbr`, `announcement_id`, `callrecording_id`, `channel`, `orig_account`, `trunknum`, and additional module-specific ID fields.
+- **Expanded object ID detection** -- `detectObjectId()` now recognizes `pagenbr`, `announcement_id`, `callrecording_id`, `channel`, `orig_account`, `trunknum`, `destid`, `custom_exten`, `old_custom_exten`, and additional module-specific ID fields.
 
 ### Changed
 
-- **`resolveNumericObjectId` renamed to `resolveObjectId`** -- now resolves any opaque ID (numeric or UUID), not just numeric ones, using the session entity cache.
+- **`resolveNumericObjectId` renamed to `resolveObjectId`** -- now resolves any opaque ID (numeric, UUID, or typed name), using the session entity cache with case-insensitive value matching for consistent naming.
 - **Entity caching moved to `doConfigPageInit`** -- caching now triggers on every non-state-changing GET page view, not just sensitive read pages, ensuring entity names are available for subsequent delete events.
 - **Contactmanager hook renamed** -- `hookContactmanager_addEntry` changed to `hookContactmanager_addEntryByGroupID` to match FreePBX 17 Contactmanager API (`addEntryByGroupID` method).
 - **Sipsettings removed from `BEFORE_STATE_READERS`** -- `Sipsettings::getConfig()` is a generic BMO `DB_Helper` method, not a SIP-specific getter; removed to prevent incorrect before-state reads.
