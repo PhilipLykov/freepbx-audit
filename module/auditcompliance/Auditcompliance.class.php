@@ -166,6 +166,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'certman' => array(
 			array('class' => 'Certman', 'methods' => array('getCertificateDetails')),
 		),
+		'miscapps' => array(
+			array('class' => 'Miscapps', 'methods' => array('get')),
+		),
 	);
 
 	private const GLOBAL_SETTING_MAP = array(
@@ -188,12 +191,73 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private $lastStorageErrorMessage = '';
 	private $eventCapturedThisRequest = false;
 
+	/**
+	 * Snapshot of $_REQUEST['action'] taken at construction time, BEFORE
+	 * any module's doConfigPageInit can modify it. Some modules (e.g.
+	 * miscapps) nullify $_REQUEST['action'] after processing, which would
+	 * cause our hook to lose the original action name.
+	 */
+	private $originalRequestAction = '';
+	private $originalRequestSnapshot = null;
+
 	public function __construct($freepbx = null) {
 		if ($freepbx === null) {
 			throw new \Exception('Not given a FreePBX Object');
 		}
 		$this->FreePBX = $freepbx;
 		$this->db = $freepbx->Database;
+
+		if (($_SERVER['REQUEST_URI'] ?? '') !== '') {
+			$this->originalRequestAction = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
+			$this->originalRequestSnapshot = $_REQUEST;
+			$this->registerUniversalShutdownNet();
+		}
+	}
+
+	/**
+	 * Registers a shutdown function at construction time — before any
+	 * module's doConfigPageInit runs. This catches events from modules
+	 * that call redirect_standard() / exit() (e.g. miscdests) before
+	 * our doConfigPageInit hook fires, as well as modules that nullify
+	 * $_REQUEST['action'] (e.g. miscapps). PHP shutdown functions run
+	 * even after exit().
+	 */
+	private function registerUniversalShutdownNet() {
+		if (defined('AUDITCOMPLIANCE_SHUTDOWN_NET')) {
+			return;
+		}
+		define('AUDITCOMPLIANCE_SHUTDOWN_NET', true);
+		$self = $this;
+		register_shutdown_function(function () use ($self) {
+			if ($self->eventCapturedThisRequest) {
+				return;
+			}
+			if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+				return;
+			}
+			$snapshot = $self->originalRequestSnapshot;
+			if (!is_array($snapshot)) {
+				return;
+			}
+			$display = trim((string) ($snapshot['display'] ?? ''));
+			if ($display === '' || $display === 'auditcompliance') {
+				return;
+			}
+			$action = $self->originalRequestAction;
+			$method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? ''));
+			if ($method === 'POST') {
+				$effectiveAction = ($action !== '') ? $action : 'update';
+			} elseif ($method === 'GET' && $action !== '' && $self->isStateChangingAction($action, 'get')) {
+				$effectiveAction = $action;
+			} else {
+				return;
+			}
+			try {
+				$self->captureEarlyExitEvent($display, $effectiveAction);
+			} catch (\Throwable $e) {
+				// Silent in shutdown context
+			}
+		});
 	}
 
 	public function install() {
@@ -325,7 +389,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 					'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 					'announcement_id', 'callrecording_id', 'channel',
-					'orig_account', 'trunknum', 'user',
+					'orig_account', 'trunknum', 'user', 'miscapps_id',
 					'group', 'entry', 'list_id', 'entryid',
 					'cid', 'caid', 'csrref', 'fileid',
 					'calendarid', 'eventid',
@@ -396,7 +460,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private function captureGuiPostEvent($sessionId, $display) {
 		try {
-			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
+			$rawAction = ($this->originalRequestAction !== '')
+				? $this->originalRequestAction
+				: ($_REQUEST['action'] ?? '');
+			$action = $this->normalizeAction($rawAction, $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
 			$objectId = $this->detectObjectId();
 			$displayLower = strtolower((string) $display);
 			$previousPost = $this->getPreviousPostData($display, $objectId);
@@ -665,6 +732,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'miscdests' => array(
 			'method' => array('Miscdests', 'mdlist'),
 			'id' => 'id',
+			'name' => 'description',
+		),
+		'miscapps' => array(
+			'method' => array('Miscapps', 'listApps'),
+			'id' => 'miscapps_id',
 			'name' => 'description',
 		),
 		'daynight' => array(
@@ -2104,7 +2176,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'announcement_id', 'callrecording_id', 'channel',
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
-			'route_id', 'trunknum', 'file',
+			'route_id', 'trunknum', 'file', 'miscapps_id',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'disa_id',
 			'number', 'oldval',
@@ -3739,7 +3811,7 @@ JSEOF;
 			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
-			'orig_account', 'trunknum', 'user',
+			'orig_account', 'trunknum', 'user', 'miscapps_id',
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'csrref', 'fileid',
 			'calendarid', 'eventid',
