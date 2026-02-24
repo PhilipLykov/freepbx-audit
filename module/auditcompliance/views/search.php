@@ -596,8 +596,37 @@ $preset = $request['preset'] ?? '';
 		var changesHtml = '';
 		if (r.change_changed && r.change_changed !== '{}' && r.change_changed !== '[]') {
 			hasChanges = true;
-			changesHtml += '<span class="change-label change-label-changed"><i class="fa fa-pencil" style="margin-right:4px;"></i>Changed:</span>';
-			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_changed) + '</div>';
+			var changedObj = tryParseJson(r.change_changed);
+			var hasDiff = false;
+			if (changedObj) {
+				for (var ck in changedObj) {
+					if (changedObj.hasOwnProperty(ck) && changedObj[ck] && typeof changedObj[ck] === "object" && "old" in changedObj[ck]) {
+						hasDiff = true; break;
+					}
+				}
+			}
+			if (hasDiff) {
+				changesHtml += '<span class="change-label change-label-changed"><i class="fa fa-exchange" style="margin-right:4px;"></i>Changed Values:</span>';
+				changesHtml += '<table style="width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:12px;">';
+				changesHtml += '<tr><th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Field</th>';
+				changesHtml += '<th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Old</th>';
+				changesHtml += '<th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">New</th></tr>';
+				for (var dk in changedObj) {
+					if (!changedObj.hasOwnProperty(dk)) continue;
+					var dv = changedObj[dk];
+					if (dv && typeof dv === "object" && "old" in dv) {
+						var oldStr = (typeof dv.old === "object") ? JSON.stringify(dv.old) : String(dv.old||"");
+						var newStr = (typeof dv["new"] === "object") ? JSON.stringify(dv["new"]) : String(dv["new"]||"");
+						changesHtml += '<tr><td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;font-weight:600;">' + esc(dk) + '</td>';
+						changesHtml += '<td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;color:#c0392b;background:#fff5f5;">' + esc(oldStr) + '</td>';
+						changesHtml += '<td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;color:#27ae60;background:#f0fff4;">' + esc(newStr) + '</td></tr>';
+					}
+				}
+				changesHtml += '</table>';
+			} else {
+				changesHtml += '<span class="change-label change-label-changed"><i class="fa fa-pencil" style="margin-right:4px;"></i>Submitted Data:</span>';
+				changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_changed) + '</div>';
+			}
 		}
 		if (r.change_added && r.change_added !== '{}' && r.change_added !== '[]') {
 			hasChanges = true;
@@ -608,6 +637,11 @@ $preset = $request['preset'] ?? '';
 			hasChanges = true;
 			changesHtml += '<span class="change-label change-label-removed"><i class="fa fa-minus" style="margin-right:4px;"></i>Removed:</span>';
 			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_removed) + '</div>';
+		}
+		if (r.change_before && r.change_before !== '{}' && r.change_before !== 'null') {
+			hasChanges = true;
+			changesHtml += '<span class="change-label" style="color:#2980b9;"><i class="fa fa-history" style="margin-right:4px;"></i>State Before Change:</span>';
+			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_before) + '</div>';
 		}
 		if (hasChanges) {
 			html += '<div class="audit-detail-changes">';
@@ -631,6 +665,11 @@ $preset = $request['preset'] ?? '';
 		} catch (e) {
 			return esc(str);
 		}
+	}
+
+	function tryParseJson(str) {
+		try { return JSON.parse(str); }
+		catch (e) { return null; }
 	}
 
 	function updatePagination(total, offset) {

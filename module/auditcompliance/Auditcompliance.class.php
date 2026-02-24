@@ -17,25 +17,78 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private const SENSITIVE_READ_PAGES = array(
 		'cdr' => 'cdr_access',
 		'recordings' => 'recording_access',
+		'cel' => 'cel_data_access',
 		'userman' => 'user_credentials_access',
 		'certman' => 'certificate_access',
-		'voicemail' => 'voicemail_access',
-		'conferences' => 'conference_pin_access',
-		'contactmanager' => 'contact_data_access',
-		'queues' => 'queue_credentials_access',
 		'manager' => 'ami_credentials_access',
-		'sipsettings' => 'sip_credentials_access',
-		'logfiles' => 'system_log_access',
 		'arimanager' => 'ari_credentials_access',
 		'filestore' => 'storage_credentials_access',
-		'calendar' => 'calendar_credentials_access',
-		'fax' => 'fax_settings_access',
-		'pinsets' => 'pin_credentials_access',
-		'superfecta' => 'callerid_config_access',
 		'xmpp' => 'xmpp_credentials_access',
+		'calendar' => 'calendar_credentials_access',
+		'voicemail' => 'voicemail_access',
+		'conferences' => 'conference_pin_access',
+		'pinsets' => 'pin_credentials_access',
+		'contactmanager' => 'contact_data_access',
 		'phonebook' => 'phonebook_personal_access',
-		'blacklist' => 'blacklist_personal_access',
-		'cel' => 'cel_data_access'
+		'logfiles' => 'system_log_access',
+		'superfecta' => 'callerid_config_access'
+	);
+
+	private const BEFORE_STATE_READERS = array(
+		'extensions' => array(
+			array('class' => 'Core', 'methods' => array('getDevice', 'getUser')),
+		),
+		'ivr' => array(
+			array('class' => 'Ivr', 'methods' => array('getDetails')),
+		),
+		'trunks' => array(
+			array('class' => 'Core', 'methods' => array('getTrunk')),
+		),
+		'ringgroups' => array(
+			array('class' => 'Core', 'methods' => array('getRingGroup')),
+		),
+		'queues' => array(
+			array('class' => 'Queues', 'methods' => array('getQueue', 'getQueueByExtension')),
+		),
+		'timeconditions' => array(
+			array('class' => 'Timeconditions', 'methods' => array('getTimecondition')),
+		),
+		'announcement' => array(
+			array('class' => 'Announcement', 'methods' => array('getAnnouncement')),
+		),
+		'conferences' => array(
+			array('class' => 'Conferences', 'methods' => array('getConference')),
+		),
+		'parking' => array(
+			array('class' => 'Parking', 'methods' => array('getParking')),
+		),
+		'paging' => array(
+			array('class' => 'Paging', 'methods' => array('getPaging')),
+		),
+		'callrecording' => array(
+			array('class' => 'Callrecording', 'methods' => array('getRecording')),
+		),
+		'backup' => array(
+			array('class' => 'Backup', 'methods' => array('getBackup')),
+		),
+		'did' => array(
+			array('class' => 'Core', 'methods' => array('getInboundRoute')),
+		),
+		'routing' => array(
+			array('class' => 'Core', 'methods' => array('getOutboundRoute')),
+		),
+		'userman' => array(
+			array('class' => 'Userman', 'methods' => array('getUserByID')),
+		),
+		'voicemail' => array(
+			array('class' => 'Voicemail', 'methods' => array('getVoicemailByExtension')),
+		),
+		'sipsettings' => array(
+			array('class' => 'Sipsettings', 'methods' => array('getConfig')),
+		),
+		'certman' => array(
+			array('class' => 'Certman', 'methods' => array('getCertificateDetails')),
+		),
 	);
 
 	private const GLOBAL_SETTING_MAP = array(
@@ -135,6 +188,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		$this->injectAuditScripts();
 
+		$handler = strtolower(trim((string) ($_REQUEST['handler'] ?? '')));
+		if (in_array($handler, array('reload', 'retrieve_conf'), true)) {
+			$this->captureApplyConfigEvent($sessionId);
+			return;
+		}
+
 		if (empty($display)) {
 			return;
 		}
@@ -153,6 +212,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		try {
 			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
 			$objectId = $this->detectObjectId();
+			$beforeState = $this->readBeforeState($display, $objectId);
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -166,13 +226,41 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
 				'request_hash' => $this->hashRequest($_REQUEST),
-				'change' => $this->buildChangePayload($_REQUEST)
+				'change' => $this->buildChangePayload($_REQUEST, $beforeState)
 			));
 		} catch (\Throwable $e) {
 			$this->debugLog('GUI audit write failed', array(
 				'error' => $e->getMessage(),
 				'display' => (string) $display
 			));
+		}
+	}
+
+	private function captureApplyConfigEvent($sessionId) {
+		try {
+			$this->routeEvent(array(
+				'session_id' => $sessionId,
+				'session_phase' => 'activity',
+				'channel' => 'gui',
+				'module_name' => 'framework',
+				'action' => 'apply_config',
+				'outcome' => 'success',
+				'route' => 'config.php?handler=reload',
+				'object_type' => 'system',
+				'object_id' => '',
+				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'POST',
+				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+				'request_hash' => '',
+				'change' => array(
+					'before' => null,
+					'after' => null,
+					'added' => array(),
+					'removed' => array(),
+					'changed' => array('action' => 'apply_config', 'description' => 'Administrator applied configuration changes to Asterisk')
+				)
+			));
+		} catch (\Throwable $e) {
+			$this->debugLog('Apply config audit failed', array('error' => $e->getMessage()));
 		}
 	}
 
@@ -1292,23 +1380,31 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			return array('status' => false, 'message' => 'Skipped');
 		}
 
+		$isApplyConfig = ($targetModule === 'framework'
+			&& in_array($targetCommand, array('reload', 'retrieve_conf', 'apply_config', ''), true));
+		if ($isApplyConfig) {
+			$targetCommand = 'apply_config';
+		}
+
 		try {
 			$this->routeEvent(array(
 				'session_id' => (string) $sessionId,
 				'session_phase' => 'activity',
-				'channel' => 'ajax',
+				'channel' => $isApplyConfig ? 'gui' : 'ajax',
 				'module_name' => $targetModule,
 				'action' => $targetCommand !== '' ? $targetCommand : 'ajax_action',
 				'outcome' => ($httpStatus >= 200 && $httpStatus < 400) ? 'success' : 'failure',
-				'route' => 'ajax.php?module=' . $targetModule,
-				'object_type' => $targetModule,
+				'route' => $isApplyConfig ? 'config.php?handler=reload' : ('ajax.php?module=' . $targetModule),
+				'object_type' => $isApplyConfig ? 'system' : $targetModule,
 				'object_id' => '',
 				'request_method' => $targetMethod,
 				'request_uri' => $targetUrl,
 				'change' => array(
 					'before' => null, 'after' => null,
 					'added' => array(), 'removed' => array(),
-					'changed' => array('command' => $targetCommand, 'http_status' => $httpStatus)
+					'changed' => $isApplyConfig
+						? array('action' => 'apply_config', 'description' => 'Administrator applied configuration changes to Asterisk')
+						: array('command' => $targetCommand, 'http_status' => $httpStatus)
 				)
 			));
 		} catch (\Throwable $e) {
@@ -1500,8 +1596,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	});
 
 	// --- Universal AJAX interceptor ---
-	// Monitors all XMLHttpRequest POST/PUT/DELETE calls to ajax.php
-	// for ANY module (except auditcompliance) and beacons the metadata.
+	// Monitors all XMLHttpRequest POST/PUT/DELETE calls to ajax.php and
+	// config.php (Apply Config / reload) for ANY module except auditcompliance.
 	var origOpen=XMLHttpRequest.prototype.open;
 	var origSend=XMLHttpRequest.prototype.send;
 	XMLHttpRequest.prototype.open=function(method,url){
@@ -1513,9 +1609,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		var self=this;
 		var m=self._auditMethod||"";
 		var u=self._auditUrl||"";
-		if((m==="POST"||m==="PUT"||m==="DELETE")&&u.indexOf("ajax.php")!==-1&&u.indexOf("module=auditcompliance")===-1){
+		var isAjax=(m==="POST"||m==="PUT"||m==="DELETE")&&u.indexOf("ajax.php")!==-1&&u.indexOf("module=auditcompliance")===-1;
+		var isReload=(m==="POST")&&u.indexOf("config.php")!==-1&&(u.indexOf("handler=reload")!==-1||u.indexOf("handler=retrieve_conf")!==-1);
+		if(isAjax||isReload){
 			var mod="",cmd="";
-			try{
+			if(isReload){mod="framework";cmd="apply_config";}
+			else{try{
 				var qIdx=u.indexOf("?");
 				if(qIdx>=0){
 					var params=new URLSearchParams(u.substring(qIdx));
@@ -1527,7 +1626,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					if(!mod)mod=bp.get("module")||"";
 					if(!cmd)cmd=bp.get("command")||"";
 				}
-			}catch(e){}
+			}catch(e){}}
 			if(mod&&mod!=="auditcompliance"){
 				self.addEventListener("loadend",function(){
 					try{
@@ -1643,15 +1742,135 @@ JSEOF;
 	// Change payload / redaction
 	// ----------------------------------------------------------------
 
-	private function buildChangePayload(array $request) {
+	private function buildChangePayload(array $request, $beforeState = null) {
 		$redacted = $this->redactSensitiveData($request);
+		if ($beforeState !== null && is_array($beforeState)) {
+			$diff = $this->computeChangeDiff($beforeState, $redacted);
+			return array(
+				'before' => $beforeState,
+				'after' => $redacted,
+				'added' => $diff['added'],
+				'removed' => $diff['removed'],
+				'changed' => $diff['changed']
+			);
+		}
 		return array(
 			'before' => null,
-			'after' => null,
+			'after' => $redacted,
 			'added' => array(),
 			'removed' => array(),
 			'changed' => $redacted
 		);
+	}
+
+	/**
+	 * Read the current state of the object being modified, BEFORE the
+	 * target module processes the POST. Uses module-specific getters
+	 * for known modules and a generic fallback for unknown ones.
+	 */
+	private function readBeforeState($display, $objectId) {
+		if ($objectId === '') {
+			return null;
+		}
+		$displayLower = strtolower((string) $display);
+		$readers = self::BEFORE_STATE_READERS[$displayLower] ?? null;
+		if ($readers !== null) {
+			foreach ($readers as $reader) {
+				$result = $this->tryModuleGetter($reader['class'], $reader['methods'], $objectId);
+				if ($result !== null) {
+					return $result;
+				}
+			}
+		}
+		return $this->readGenericBeforeState($display, $objectId);
+	}
+
+	private function tryModuleGetter($className, array $methods, $objectId) {
+		try {
+			if (!isset($this->FreePBX->$className) || !is_object($this->FreePBX->$className)) {
+				return null;
+			}
+			$module = $this->FreePBX->$className;
+			foreach ($methods as $method) {
+				if (!method_exists($module, $method)) {
+					continue;
+				}
+				$result = @$module->$method($objectId);
+				if ($result !== null && $result !== false) {
+					if (is_object($result)) {
+						$result = (array) $result;
+					}
+					if (is_array($result) && !empty($result)) {
+						return $this->redactSensitiveData($result);
+					}
+				}
+			}
+		} catch (\Throwable $e) {
+			$this->debugLog('Before-state read failed', array(
+				'class' => $className, 'error' => $e->getMessage()
+			));
+		}
+		return null;
+	}
+
+	private function readGenericBeforeState($display, $objectId) {
+		$className = ucfirst(strtolower((string) $display));
+		try {
+			if (!isset($this->FreePBX->$className) || !is_object($this->FreePBX->$className)) {
+				return null;
+			}
+			$module = $this->FreePBX->$className;
+			foreach (array('getDetails', 'getById', 'getConfig') as $method) {
+				if (!method_exists($module, $method)) {
+					continue;
+				}
+				$result = @$module->$method($objectId);
+				if ($result !== null && $result !== false) {
+					if (is_object($result)) {
+						$result = (array) $result;
+					}
+					if (is_array($result) && !empty($result)) {
+						return $this->redactSensitiveData($result);
+					}
+				}
+			}
+		} catch (\Throwable $e) {
+			// Silent — unknown module
+		}
+		return null;
+	}
+
+	/**
+	 * Compare before and after state. Only keys present in BOTH
+	 * datasets are compared to avoid false positives from form
+	 * control fields (action, display, CSRF tokens) that only
+	 * exist in the POST data.
+	 */
+	private function computeChangeDiff($before, $after) {
+		$diff = array('added' => array(), 'removed' => array(), 'changed' => array());
+		if (!is_array($before) || !is_array($after)) {
+			if (is_array($after)) {
+				$diff['changed'] = $after;
+			}
+			return $diff;
+		}
+		foreach ($after as $key => $newVal) {
+			if (!array_key_exists($key, $before)) {
+				continue;
+			}
+			$oldVal = $before[$key];
+			if ($this->valuesAreDifferent($oldVal, $newVal)) {
+				$diff['changed'][$key] = array('old' => $oldVal, 'new' => $newVal);
+			}
+		}
+		return $diff;
+	}
+
+	private function valuesAreDifferent($old, $new) {
+		if (is_array($old) || is_array($new)) {
+			return json_encode($old) !== json_encode($new);
+		}
+		return (string) $old !== (string) $new;
 	}
 
 	private function redactSensitiveData(array $input) {

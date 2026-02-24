@@ -228,6 +228,38 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 .audit-evt-boundary.boundary-timeout { border-left: 3px solid #e67e22; }
 .audit-evt-boundary.boundary-failure { border-left: 3px solid #c0392b; }
 
+.audit-evt-toggle { cursor: pointer; }
+.audit-evt-expand { font-size: 10px; color: #adb5bd; margin-left: auto; padding-left: 8px; transition: transform 0.2s; }
+.audit-evt-item.open .audit-evt-expand { transform: rotate(180deg); }
+.audit-evt-changes {
+	display: none;
+	padding: 10px 18px 10px 36px;
+	background: #fafbfc;
+	border-bottom: 1px solid #f0f0f0;
+	font-size: 12px;
+}
+.audit-evt-item.open + .audit-evt-changes { display: block; }
+.audit-change-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.audit-change-table th {
+	text-align: left; font-size: 10px; text-transform: uppercase; color: #6c757d;
+	letter-spacing: 0.3px; padding: 4px 8px; border-bottom: 1px solid #e9ecef; background: #f0f2f4;
+}
+.audit-change-table td {
+	padding: 4px 8px; border-bottom: 1px solid #f5f5f5; word-break: break-word; max-width: 300px;
+}
+.audit-change-old { color: #c0392b; background: #fff5f5; }
+.audit-change-new { color: #27ae60; background: #f0fff4; }
+.audit-change-section-title {
+	font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px;
+	color: #6c757d; margin: 6px 0 2px; display: flex; align-items: center; gap: 4px;
+}
+.audit-change-json {
+	font-family: 'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+	font-size: 11px; white-space: pre-wrap; word-break: break-all;
+	max-height: 160px; overflow-y: auto; background: #fff;
+	border: 1px solid #e9ecef; border-radius: 4px; padding: 6px; margin-top: 2px;
+}
+
 .audit-session-footer {
 	padding: 10px 18px;
 	border-top: 1px solid #f0f0f0;
@@ -371,32 +403,92 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 					<?php if (!empty($events)): ?>
 					<div class="audit-session-events">
 						<ul class="audit-evt-list">
-							<?php foreach ($events as $event): ?>
-							<?php
-								$phase = (string) ($event['session_phase'] ?? 'activity');
-								$isBoundary = in_array($phase, array('login', 'logout', 'timeout', 'failure'), true);
-								$dotClass = 'dot-' . $phase;
-								$liClass = $isBoundary ? ('audit-evt-boundary boundary-' . $phase) : '';
-								$chClass = 'ch-' . ($event['channel'] ?? 'gui');
-								$outClass = ($event['outcome'] ?? 'success') === 'success' ? 'outcome-ok' : 'outcome-fail';
-							?>
-							<li class="audit-evt-item <?php echo $liClass; ?>">
-								<span class="audit-evt-dot <?php echo $dotClass; ?>"></span>
-								<span class="audit-evt-time"><?php echo $esc($event['occurred_at_local']); ?></span>
-								<?php if ($isBoundary): ?>
-									<span class="audit-evt-detail">
-										<strong><?php echo $esc(strtoupper($phase)); ?></strong>
-									</span>
-								<?php else: ?>
-									<span class="audit-evt-detail">
-										<span class="audit-evt-module"><?php echo $esc($event['module_name']); ?></span>
-										<span class="audit-evt-action"> / <?php echo $esc($event['action']); ?></span>
-									</span>
-									<span class="audit-evt-channel-badge <?php echo $chClass; ?>"><?php echo $esc($event['channel'] ?? ''); ?></span>
-									<span class="audit-evt-outcome <?php echo $outClass; ?>"><?php echo $esc($event['outcome'] ?? ''); ?></span>
+						<?php foreach ($events as $evtIdx => $event): ?>
+						<?php
+							$phase = (string) ($event['session_phase'] ?? 'activity');
+							$isBoundary = in_array($phase, array('login', 'logout', 'timeout', 'failure'), true);
+							$dotClass = 'dot-' . $phase;
+							$liClass = $isBoundary ? ('audit-evt-boundary boundary-' . $phase) : '';
+							$chClass = 'ch-' . ($event['channel'] ?? 'gui');
+							$outClass = ($event['outcome'] ?? 'success') === 'success' ? 'outcome-ok' : 'outcome-fail';
+							$hasChanges = false;
+							$changeBefore = null;
+							$changeChanged = null;
+							$changeAdded = null;
+							if (!$isBoundary) {
+								$changeBefore = (!empty($event['change_before']) && $event['change_before'] !== '{}' && $event['change_before'] !== 'null') ? $event['change_before'] : null;
+								$changeChanged = (!empty($event['change_changed']) && $event['change_changed'] !== '{}' && $event['change_changed'] !== '[]') ? $event['change_changed'] : null;
+								$changeAdded = (!empty($event['change_added']) && $event['change_added'] !== '{}' && $event['change_added'] !== '[]') ? $event['change_added'] : null;
+								$hasChanges = ($changeBefore !== null || $changeChanged !== null || $changeAdded !== null);
+							}
+							$evtUnique = $idx . '_' . $evtIdx;
+						?>
+						<li class="audit-evt-item <?php echo $liClass; ?> <?php echo $hasChanges ? 'audit-evt-toggle' : ''; ?>"
+							<?php if ($hasChanges): ?>onclick="this.classList.toggle('open');"<?php endif; ?>
+							data-evt="<?php echo $evtUnique; ?>">
+							<span class="audit-evt-dot <?php echo $dotClass; ?>"></span>
+							<span class="audit-evt-time"><?php echo $esc($event['occurred_at_local']); ?></span>
+							<?php if ($isBoundary): ?>
+								<span class="audit-evt-detail">
+									<strong><?php echo $esc(strtoupper($phase)); ?></strong>
+								</span>
+							<?php else: ?>
+								<span class="audit-evt-detail">
+									<span class="audit-evt-module"><?php echo $esc($event['module_name']); ?></span>
+									<span class="audit-evt-action"> / <?php echo $esc($event['action']); ?></span>
+									<?php if (!empty($event['object_id'])): ?>
+										<span style="color:#adb5bd;font-size:11px;margin-left:4px;">(<?php echo $esc($event['object_id']); ?>)</span>
+									<?php endif; ?>
+								</span>
+								<span class="audit-evt-channel-badge <?php echo $chClass; ?>"><?php echo $esc($event['channel'] ?? ''); ?></span>
+								<span class="audit-evt-outcome <?php echo $outClass; ?>"><?php echo $esc($event['outcome'] ?? ''); ?></span>
+								<?php if ($hasChanges): ?>
+									<i class="fa fa-chevron-down audit-evt-expand"></i>
 								<?php endif; ?>
-							</li>
-							<?php endforeach; ?>
+							<?php endif; ?>
+						</li>
+						<?php if ($hasChanges): ?>
+						<li class="audit-evt-changes" data-evt-detail="<?php echo $evtUnique; ?>">
+							<?php
+								$beforeArr = $changeBefore ? @json_decode($changeBefore, true) : null;
+								$changedArr = $changeChanged ? @json_decode($changeChanged, true) : null;
+								$addedArr = $changeAdded ? @json_decode($changeAdded, true) : null;
+							?>
+							<?php if (is_array($changedArr) && !empty($changedArr)): ?>
+								<?php
+									$hasDiff = false;
+									foreach ($changedArr as $cv) { if (is_array($cv) && isset($cv['old'])) { $hasDiff = true; break; } }
+								?>
+								<?php if ($hasDiff): ?>
+									<div class="audit-change-section-title"><i class="fa fa-exchange" style="color:#e67e22;"></i> Changed Values</div>
+									<table class="audit-change-table">
+										<tr><th style="width:25%;">Field</th><th style="width:37%;">Old Value</th><th style="width:38%;">New Value</th></tr>
+										<?php foreach ($changedArr as $ck => $cv): ?>
+											<?php if (is_array($cv) && isset($cv['old'])): ?>
+											<tr>
+												<td><strong><?php echo $esc($ck); ?></strong></td>
+												<td class="audit-change-old"><?php echo $esc(is_array($cv['old']) ? json_encode($cv['old']) : $cv['old']); ?></td>
+												<td class="audit-change-new"><?php echo $esc(is_array($cv['new']) ? json_encode($cv['new']) : $cv['new']); ?></td>
+											</tr>
+											<?php endif; ?>
+										<?php endforeach; ?>
+									</table>
+								<?php else: ?>
+									<div class="audit-change-section-title"><i class="fa fa-pencil" style="color:#e67e22;"></i> Submitted Data</div>
+									<div class="audit-change-json"><?php echo $esc(json_encode($changedArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
+								<?php endif; ?>
+							<?php endif; ?>
+							<?php if (is_array($addedArr) && !empty($addedArr)): ?>
+								<div class="audit-change-section-title"><i class="fa fa-plus" style="color:#27ae60;"></i> Added</div>
+								<div class="audit-change-json"><?php echo $esc(json_encode($addedArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
+							<?php endif; ?>
+							<?php if (is_array($beforeArr) && !empty($beforeArr)): ?>
+								<div class="audit-change-section-title"><i class="fa fa-history" style="color:#2980b9;"></i> State Before Change</div>
+								<div class="audit-change-json"><?php echo $esc(json_encode($beforeArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
+							<?php endif; ?>
+						</li>
+						<?php endif; ?>
+						<?php endforeach; ?>
 						</ul>
 					</div>
 					<?php endif; ?>
