@@ -231,13 +231,13 @@ $preset = $request['preset'] ?? '';
 							<label for="audit-search-text"><i class="fa fa-search" style="margin-right: 3px;"></i> <?php echo _('Search'); ?></label>
 							<input type="text" id="audit-search-text" class="form-control input-sm" placeholder="<?php echo $esc(_('Search across module, action, actor, object...')); ?>"/>
 						</div>
-						<div class="form-group">
-							<label for="audit-date-from"><?php echo _('From'); ?></label>
-							<input type="date" id="audit-date-from" class="form-control input-sm"/>
-						</div>
-						<div class="form-group">
-							<label for="audit-date-to"><?php echo _('To'); ?></label>
-							<input type="date" id="audit-date-to" class="form-control input-sm"/>
+					<div class="form-group">
+						<label for="audit-date-from"><?php echo _('From'); ?></label>
+						<input type="text" id="audit-date-from" class="form-control input-sm" placeholder="DD-MM-YYYY" maxlength="10" style="width:120px;"/>
+					</div>
+					<div class="form-group">
+						<label for="audit-date-to"><?php echo _('To'); ?></label>
+						<input type="text" id="audit-date-to" class="form-control input-sm" placeholder="DD-MM-YYYY" maxlength="10" style="width:120px;"/>
 						</div>
 						<div class="btn-group-actions">
 							<button type="button" id="audit-btn-search" class="btn btn-primary btn-sm">
@@ -395,6 +395,29 @@ $preset = $request['preset'] ?? '';
 		var d = document.createElement("div");
 		d.appendChild(document.createTextNode(String(str || "")));
 		return d.innerHTML;
+	}
+
+	function initDateInput(el) {
+		if (!el) return;
+		el.addEventListener("input", function() {
+			var v = this.value.replace(/[^0-9]/g, "");
+			if (v.length > 8) v = v.substring(0, 8);
+			var parts = [];
+			if (v.length > 0) parts.push(v.substring(0, Math.min(2, v.length)));
+			if (v.length > 2) parts.push(v.substring(2, Math.min(4, v.length)));
+			if (v.length > 4) parts.push(v.substring(4, 8));
+			this.value = parts.join("-");
+		});
+		el.addEventListener("blur", function() {
+			var v = this.value.trim();
+			if (v !== "" && !/^\d{2}-\d{2}-\d{4}$/.test(v)) {
+				this.style.borderColor = "#c0392b";
+				this.title = "Use DD-MM-YYYY format";
+			} else {
+				this.style.borderColor = "";
+				this.title = "";
+			}
+		});
 	}
 
 	function relativeTime(unixTs) {
@@ -848,14 +871,21 @@ $preset = $request['preset'] ?? '';
 		}
 	}
 
+	function initDateInputs() {
+		initDateInput(document.getElementById("audit-date-from"));
+		initDateInput(document.getElementById("audit-date-to"));
+	}
+
 	if (document.readyState === "loading") {
 		document.addEventListener("DOMContentLoaded", function() {
+			initDateInputs();
 			loadFilterValues();
 			initEvents();
 			applyPreset();
 			doSearch();
 		});
 	} else {
+		initDateInputs();
 		loadFilterValues();
 		initEvents();
 		applyPreset();

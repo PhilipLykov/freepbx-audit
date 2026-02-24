@@ -1361,19 +1361,39 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$dateFrom = trim((string) ($_REQUEST['date_from'] ?? ''));
 		$dateTo = trim((string) ($_REQUEST['date_to'] ?? ''));
 		if ($dateFrom !== '') {
-			$dt = \DateTime::createFromFormat('Y-m-d', $dateFrom, $tz);
-			if ($dt !== false) {
+			$dt = $this->parseDateInput($dateFrom, $tz);
+			if ($dt !== null) {
 				$dt->setTime(0, 0, 0);
 				$filters['date_from_unix'] = $dt->getTimestamp();
 			}
 		}
 		if ($dateTo !== '') {
-			$dt = \DateTime::createFromFormat('Y-m-d', $dateTo, $tz);
-			if ($dt !== false) {
+			$dt = $this->parseDateInput($dateTo, $tz);
+			if ($dt !== null) {
 				$dt->setTime(23, 59, 59);
 				$filters['date_to_unix'] = $dt->getTimestamp();
 			}
 		}
+	}
+
+	/**
+	 * Parse a date string in DD-MM-YYYY format. Falls back to YYYY-MM-DD
+	 * for backwards compatibility with existing bookmarks/links.
+	 */
+	private function parseDateInput($value, \DateTimeZone $tz) {
+		$value = trim((string) $value);
+		if ($value === '') {
+			return null;
+		}
+		$dt = \DateTime::createFromFormat('d-m-Y', $value, $tz);
+		if ($dt !== false && !array_sum($dt::getLastErrors())) {
+			return $dt;
+		}
+		$dt = \DateTime::createFromFormat('Y-m-d', $value, $tz);
+		if ($dt !== false && !array_sum($dt::getLastErrors())) {
+			return $dt;
+		}
+		return null;
 	}
 
 	private function handleFilterValuesAjax() {
