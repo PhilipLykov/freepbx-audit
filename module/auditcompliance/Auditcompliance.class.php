@@ -36,6 +36,58 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'superfecta' => 'callerid_config_access'
 	);
 
+	/**
+	 * AJAX commands that are read-only lookups, validations, or UI helpers
+	 * and should NOT be recorded as audit events. Checked in handleInterceptedAjax().
+	 * Key = module name (lowercase), value = array of command names (lowercase).
+	 * '*' key applies to all modules.
+	 */
+	private const AJAX_READ_ONLY_COMMANDS = array(
+		'*' => array(
+			'getjson', 'gethtml', 'grid', 'search', 'list', 'getconfig',
+			'getsettings', 'getdata', 'getinfo', 'getstatus',
+		),
+		'userman' => array(
+			'pwdtest', 'validators', 'getguihookinfo', 'getdirectories',
+			'getusers', 'getgroups', 'getuserfields', 'getucptemplates',
+			'getcallactivitygroups', 'auth', 'checkpasswordreminder',
+			'nexttrns', 'setlocales',
+		),
+		'core' => array(
+			'getextensiondetails', 'getdestinations', 'getjson',
+		),
+		'cdr' => array(
+			'gethtml5', 'playback',
+		),
+		'cel' => array(
+			'report', 'gethtml5', 'playback',
+		),
+		'queues' => array(
+			'getjson',
+		),
+		'contactmanager' => array(
+			'sdgrid', 'grid', 'lookup',
+		),
+		'backup' => array(
+			'getbackup', 'getbackups', 'getstorage',
+		),
+		'dashboard' => array(
+			'getcontent', 'getnotifications',
+		),
+		'filestore' => array(
+			'grid', 'testconnection',
+		),
+		'arimanager' => array(
+			'grid', 'get',
+		),
+		'blacklist' => array(
+			'calllog',
+		),
+		'logfiles' => array(
+			'log_file_read',
+		),
+	);
+
 	private const BEFORE_STATE_READERS = array(
 		'extensions' => array(
 			array('class' => 'Core', 'methods' => array('getDevice', 'getUser')),
@@ -1504,9 +1556,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$targetMethod = strtoupper(trim((string) ($_REQUEST['target_method'] ?? 'POST')));
 		$targetUrl = $this->truncate(trim((string) ($_REQUEST['target_url'] ?? '')), 2048);
 		$httpStatus = (int) ($_REQUEST['http_status'] ?? 200);
+		$targetBody = $this->truncate(trim((string) ($_REQUEST['target_body'] ?? '')), 4096);
 
 		if ($targetModule === '' || $targetModule === 'auditcompliance') {
 			return array('status' => false, 'message' => 'Skipped');
+		}
+
+		if ($this->isReadOnlyAjaxCommand($targetModule, $targetCommand)) {
+			return array('status' => false, 'message' => 'Skipped read-only');
 		}
 
 		$isApplyConfig = ($targetModule === 'framework'
@@ -1514,6 +1571,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if ($isApplyConfig) {
 			$targetCommand = 'apply_config';
 		}
+
+		$objectId = $this->extractObjectIdFromAjaxBody($targetBody, $targetUrl);
 
 		try {
 			$this->routeEvent(array(
@@ -1525,7 +1584,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'outcome' => ($httpStatus >= 200 && $httpStatus < 400) ? 'success' : 'failure',
 				'route' => $isApplyConfig ? 'config.php?handler=reload' : ('ajax.php?module=' . $targetModule),
 				'object_type' => $isApplyConfig ? 'system' : $targetModule,
-				'object_id' => '',
+				'object_id' => $objectId,
 				'request_method' => $targetMethod,
 				'request_uri' => $targetUrl,
 				'change' => array(
@@ -1533,7 +1592,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'added' => array(), 'removed' => array(),
 					'changed' => $isApplyConfig
 						? array('action' => 'apply_config', 'description' => 'Administrator applied configuration changes to Asterisk')
-						: array('command' => $targetCommand, 'http_status' => $httpStatus)
+						: $this->buildAjaxChangePayload($targetCommand, $httpStatus, $targetBody)
 				)
 			));
 		} catch (\Throwable $e) {
@@ -1541,6 +1600,110 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			return array('status' => false, 'message' => 'Audit write failed');
 		}
 		return array('status' => true, 'message' => 'AJAX action recorded');
+	}
+
+	private function isReadOnlyAjaxCommand($module, $command) {
+		$moduleLower = strtolower($module);
+		$commandLower = strtolower($command);
+		if ($commandLower === '') {
+			return false;
+		}
+
+		if (isset(self::AJAX_READ_ONLY_COMMANDS['*'])) {
+			if (in_array($commandLower, self::AJAX_READ_ONLY_COMMANDS['*'], true)) {
+				return true;
+			}
+		}
+		if (isset(self::AJAX_READ_ONLY_COMMANDS[$moduleLower])) {
+			if (in_array($commandLower, self::AJAX_READ_ONLY_COMMANDS[$moduleLower], true)) {
+				return true;
+			}
+		}
+
+		$readOnlyPrefixes = array('get', 'list', 'check', 'search', 'lookup', 'validate', 'test', 'load', 'fetch', 'query');
+		foreach ($readOnlyPrefixes as $prefix) {
+			if (strpos($commandLower, $prefix) === 0 && strlen($commandLower) > strlen($prefix)) {
+				$nextChar = $commandLower[strlen($prefix)];
+				if (ctype_upper($command[strlen($prefix)]) || $nextChar === '_') {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Extracts an object identifier from the AJAX POST body or URL parameters.
+	 * The JS interceptor sends a summary of the POST body as `target_body`.
+	 */
+	private function extractObjectIdFromAjaxBody($body, $url) {
+		$candidates = array(
+			'id', 'ext', 'extension', 'extdisplay', 'account',
+			'user_id', 'trunkid', 'itemid', 'group_id', 'entry_id',
+			'queue', 'grpnum', 'cidnum', 'backup_id', 'tcid',
+			'tgid', 'confno', 'pagegrp', 'pagenbr', 'rg', 'ivr_id',
+			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
+			'announcement_id', 'callrecording_id', 'channel',
+			'name', 'username',
+		);
+
+		if ($body !== '') {
+			parse_str($body, $params);
+			if (!empty($params)) {
+				if (!empty($params['extensions']) && is_array($params['extensions'])) {
+					return $this->truncate(implode(',', array_slice($params['extensions'], 0, 10)), 256);
+				}
+				foreach ($candidates as $key) {
+					if (!empty($params[$key])) {
+						return $this->truncate((string) $params[$key], 256);
+					}
+				}
+			}
+		}
+
+		if ($url !== '') {
+			$qPos = strpos($url, '?');
+			if ($qPos !== false) {
+				parse_str(substr($url, $qPos + 1), $urlParams);
+				foreach ($candidates as $key) {
+					if (!empty($urlParams[$key])) {
+						return $this->truncate((string) $urlParams[$key], 256);
+					}
+				}
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Builds a richer change payload for AJAX events by extracting
+	 * identifiers and type info from the intercepted POST body.
+	 */
+	private function buildAjaxChangePayload($command, $httpStatus, $body) {
+		$payload = array('command' => $command, 'http_status' => $httpStatus);
+		if ($body !== '') {
+			parse_str($body, $params);
+			if (!empty($params['type'])) {
+				$payload['type'] = $this->truncate((string) $params['type'], 128);
+			}
+			if (!empty($params['extensions']) && is_array($params['extensions'])) {
+				$payload['target_ids'] = array_map(function ($v) {
+					return $this->truncate((string) $v, 128);
+				}, array_slice($params['extensions'], 0, 20));
+			}
+			if (!empty($params['name'])) {
+				$payload['name'] = $this->truncate((string) $params['name'], 256);
+			}
+			if (!empty($params['username'])) {
+				$payload['username'] = $this->truncate((string) $params['username'], 256);
+			}
+			if (!empty($params['id'])) {
+				$payload['target_id'] = $this->truncate((string) $params['id'], 256);
+			}
+		}
+		return $this->redactSensitiveData($payload);
 	}
 
 	private function handleSearchAjax() {
@@ -1741,7 +1904,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		var isAjax=(m==="POST"||m==="PUT"||m==="DELETE")&&u.indexOf("ajax.php")!==-1&&u.indexOf("module=auditcompliance")===-1;
 		var isReload=(m==="POST")&&u.indexOf("config.php")!==-1&&(u.indexOf("handler=reload")!==-1||u.indexOf("handler=retrieve_conf")!==-1);
 		if(isAjax||isReload){
-			var mod="",cmd="";
+			var mod="",cmd="",bodySnippet="";
 			if(isReload){mod="framework";cmd="apply_config";}
 			else{try{
 				var qIdx=u.indexOf("?");
@@ -1756,6 +1919,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					if(!cmd)cmd=bp.get("command")||"";
 				}
 			}catch(e){}}
+			if(body&&typeof body==="string"){try{
+				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]"];
+				var bp2=new URLSearchParams(body);
+				var parts=[];
+				for(var ki=0;ki<idKeys.length;ki++){
+					var vals=bp2.getAll(idKeys[ki]);
+					if(vals.length>0){for(var vi=0;vi<Math.min(vals.length,10);vi++){
+						parts.push(idKeys[ki]+"="+vals[vi]);
+					}}
+				}
+				if(bp2.get("type"))parts.push("type="+bp2.get("type"));
+				bodySnippet=parts.join("&").substring(0,2048);
+			}catch(e){}}
 			if(!mod&&cmd==="reload"){mod="framework";cmd="apply_config";}
 			if(mod&&mod!=="auditcompliance"){
 				self.addEventListener("loadend",function(){
@@ -1764,7 +1940,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 						bx.open("POST",AUDIT_AJAX+"recordInterceptedAjax",true);
 						bx.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
 						bx.timeout=3000;
-						bx.send("target_module="+encodeURIComponent(mod)+"&target_command="+encodeURIComponent(cmd)+"&target_method="+encodeURIComponent(m)+"&target_url="+encodeURIComponent(u.substring(0,500))+"&http_status="+encodeURIComponent(self.status||0));
+						var payload="target_module="+encodeURIComponent(mod)+"&target_command="+encodeURIComponent(cmd)+"&target_method="+encodeURIComponent(m)+"&target_url="+encodeURIComponent(u.substring(0,500))+"&http_status="+encodeURIComponent(self.status||0);
+						if(bodySnippet)payload+="&target_body="+encodeURIComponent(bodySnippet);
+						bx.send(payload);
 					}catch(e){}
 				});
 			}
@@ -2145,9 +2323,16 @@ JSEOF;
 				return $this->truncate((string) $arg, 256);
 			}
 			if (is_array($arg)) {
-				foreach (array('id', 'extension', 'user_id', 'ext', 'name') as $k) {
+				foreach (array('id', 'extension', 'user_id', 'ext', 'name', 'username', 'prevUsername', 'fname', 'lname', 'displayname') as $k) {
 					if (isset($arg[$k]) && $arg[$k] !== '') {
 						return $this->truncate((string) $arg[$k], 256);
+					}
+				}
+				if (isset($arg['status']) && is_bool($arg['status'])) {
+					foreach (array('id', 'user_id', 'username', 'name', 'extension') as $k) {
+						if (isset($arg[$k]) && $arg[$k] !== '') {
+							return $this->truncate((string) $arg[$k], 256);
+						}
 					}
 				}
 			}
