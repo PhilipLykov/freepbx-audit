@@ -626,9 +626,38 @@ $preset = $request['preset'] ?? '';
 			}
 		}
 		if (r.change_added && r.change_added !== '{}' && r.change_added !== '[]') {
-			hasChanges = true;
-			changesHtml += '<span class="change-label change-label-added"><i class="fa fa-plus" style="margin-right:4px;"></i>Added:</span>';
-			changesHtml += '<div class="audit-detail-json">' + formatJson(r.change_added) + '</div>';
+			var addedObj = tryParseJson(r.change_added);
+			if (addedObj && Object.keys(addedObj).length > 0) {
+				hasChanges = true;
+				changesHtml += '<span class="change-label change-label-added"><i class="fa fa-plus" style="margin-right:4px;"></i>Added Fields:</span>';
+				changesHtml += '<table style="width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:12px;">';
+				changesHtml += '<tr><th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Field</th>';
+				changesHtml += '<th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Value</th></tr>';
+				for (var ak in addedObj) {
+					if (!addedObj.hasOwnProperty(ak)) continue;
+					var av = (typeof addedObj[ak] === "object") ? JSON.stringify(addedObj[ak]) : String(addedObj[ak]||"");
+					changesHtml += '<tr><td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;font-weight:600;">' + esc(ak) + '</td>';
+					changesHtml += '<td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;color:#27ae60;background:#f0fff4;">' + esc(av) + '</td></tr>';
+				}
+				changesHtml += '</table>';
+			}
+		}
+		if (r.change_removed && r.change_removed !== '{}' && r.change_removed !== '[]') {
+			var removedObj = tryParseJson(r.change_removed);
+			if (removedObj && Object.keys(removedObj).length > 0) {
+				hasChanges = true;
+				changesHtml += '<span class="change-label change-label-removed"><i class="fa fa-minus" style="margin-right:4px;"></i>Removed Fields:</span>';
+				changesHtml += '<table style="width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:12px;">';
+				changesHtml += '<tr><th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Field</th>';
+				changesHtml += '<th style="text-align:left;padding:3px 6px;border-bottom:1px solid #e9ecef;font-size:10px;text-transform:uppercase;color:#6c757d;">Value</th></tr>';
+				for (var rk in removedObj) {
+					if (!removedObj.hasOwnProperty(rk)) continue;
+					var rv = (typeof removedObj[rk] === "object") ? JSON.stringify(removedObj[rk]) : String(removedObj[rk]||"");
+					changesHtml += '<tr><td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;font-weight:600;">' + esc(rk) + '</td>';
+					changesHtml += '<td style="padding:3px 6px;border-bottom:1px solid #f5f5f5;color:#c0392b;background:#fff5f5;">' + esc(rv) + '</td></tr>';
+				}
+				changesHtml += '</table>';
+			}
 		}
 		if (hasChanges) {
 			html += '<div class="audit-detail-changes">';

@@ -414,10 +414,12 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 							$hasChanges = false;
 							$changeChanged = null;
 							$changeAdded = null;
+							$changeRemoved = null;
 							if (!$isBoundary) {
 								$changeChanged = (!empty($event['change_changed']) && $event['change_changed'] !== '{}' && $event['change_changed'] !== '[]') ? $event['change_changed'] : null;
 								$changeAdded = (!empty($event['change_added']) && $event['change_added'] !== '{}' && $event['change_added'] !== '[]') ? $event['change_added'] : null;
-								$hasChanges = ($changeChanged !== null || $changeAdded !== null);
+								$changeRemoved = (!empty($event['change_removed']) && $event['change_removed'] !== '{}' && $event['change_removed'] !== '[]') ? $event['change_removed'] : null;
+								$hasChanges = ($changeChanged !== null || $changeAdded !== null || $changeRemoved !== null);
 							}
 							$evtUnique = $idx . '_' . $evtIdx;
 						?>
@@ -450,6 +452,7 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 							<?php
 								$changedArr = $changeChanged ? @json_decode($changeChanged, true) : null;
 								$addedArr = $changeAdded ? @json_decode($changeAdded, true) : null;
+								$removedArr = $changeRemoved ? @json_decode($changeRemoved, true) : null;
 							?>
 							<?php if (is_array($changedArr) && !empty($changedArr)): ?>
 								<?php
@@ -473,8 +476,28 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 								<?php endif; ?>
 							<?php endif; ?>
 							<?php if (is_array($addedArr) && !empty($addedArr)): ?>
-								<div class="audit-change-section-title"><i class="fa fa-plus" style="color:#27ae60;"></i> Added</div>
-								<div class="audit-change-json"><?php echo $esc(json_encode($addedArr, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); ?></div>
+								<div class="audit-change-section-title"><i class="fa fa-plus" style="color:#27ae60;"></i> Added Fields</div>
+								<table class="audit-change-table">
+									<tr><th style="width:30%;">Field</th><th>Value</th></tr>
+									<?php foreach ($addedArr as $ak => $av): ?>
+									<tr>
+										<td><strong><?php echo $esc($ak); ?></strong></td>
+										<td class="audit-change-new"><?php echo $esc(is_array($av) ? json_encode($av) : $av); ?></td>
+									</tr>
+									<?php endforeach; ?>
+								</table>
+							<?php endif; ?>
+							<?php if (is_array($removedArr) && !empty($removedArr)): ?>
+								<div class="audit-change-section-title"><i class="fa fa-minus" style="color:#e74c3c;"></i> Removed Fields</div>
+								<table class="audit-change-table">
+									<tr><th style="width:30%;">Field</th><th>Value</th></tr>
+									<?php foreach ($removedArr as $rk => $rv): ?>
+									<tr>
+										<td><strong><?php echo $esc($rk); ?></strong></td>
+										<td class="audit-change-old"><?php echo $esc(is_array($rv) ? json_encode($rv) : $rv); ?></td>
+									</tr>
+									<?php endforeach; ?>
+								</table>
 							<?php endif; ?>
 						</li>
 						<?php endif; ?>

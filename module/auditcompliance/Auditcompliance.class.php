@@ -209,7 +209,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		try {
 			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
 			$objectId = $this->detectObjectId();
-			$beforeState = $this->readBeforeState($display, $objectId);
+			$previousPost = $this->getPreviousPostData($display, $objectId);
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -223,7 +223,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
 				'request_hash' => $this->hashRequest($_REQUEST),
-				'change' => $this->buildChangePayload($_REQUEST, $beforeState)
+				'change' => $this->buildChangePayload($_REQUEST, $previousPost)
 			));
 		} catch (\Throwable $e) {
 			$this->debugLog('GUI audit write failed', array(
@@ -1740,13 +1740,14 @@ JSEOF;
 	// Change payload / redaction
 	// ----------------------------------------------------------------
 
-	private function buildChangePayload(array $request, $beforeState = null) {
+	private function buildChangePayload(array $request, $previousPost = null) {
 		$redacted = $this->redactSensitiveData($request);
-		if ($beforeState !== null && is_array($beforeState)) {
-			$diff = $this->computeChangeDiff($beforeState, $redacted);
+		$filtered = $this->filterNoiseKeys($redacted);
+		if ($previousPost !== null && is_array($previousPost)) {
+			$diff = $this->computeChangeDiff($previousPost, $filtered);
 			return array(
 				'before' => null,
-				'after' => null,
+				'after' => $filtered,
 				'added' => $diff['added'],
 				'removed' => $diff['removed'],
 				'changed' => $diff['changed']
@@ -1754,17 +1755,66 @@ JSEOF;
 		}
 		return array(
 			'before' => null,
-			'after' => null,
+			'after' => $filtered,
 			'added' => array(),
 			'removed' => array(),
 			'changed' => array()
 		);
 	}
 
+	private function filterNoiseKeys(array $data) {
+		$skipKeys = array_flip(self::$DIFF_SKIP_KEYS);
+		$result = array();
+		foreach ($data as $key => $value) {
+			if (!isset($skipKeys[$key])) {
+				$result[$key] = $value;
+			}
+		}
+		return $result;
+	}
+
 	/**
-	 * Read the current state of the object being modified, BEFORE the
-	 * target module processes the POST. Uses module-specific getters
-	 * for known modules and a generic fallback for unknown ones.
+	 * Retrieve the POST data stored from the most recent previous audit
+	 * event for the same module and object. This serves as the "before"
+	 * baseline: since FreePBX always processes the target module's
+	 * doConfigPageInit before other modules' hooks fire, we cannot read
+	 * the DB state pre-modification. Instead we compare the current POST
+	 * against the previous POST for the same object.
+	 */
+	private function getPreviousPostData($display, $objectId) {
+		if ($objectId === '') {
+			return null;
+		}
+		try {
+			$pdo = $this->getAuditDb();
+			if ($pdo === null) {
+				return null;
+			}
+			$sql = "SELECT change_after FROM audit_events
+				WHERE module_name = ? AND object_id = ? AND channel = 'gui'
+				AND change_after IS NOT NULL AND change_after != 'null' AND change_after != '{}'
+				ORDER BY occurred_at_unix DESC LIMIT 1";
+			$sth = $pdo->prepare($sql);
+			$sth->execute(array((string) $display, (string) $objectId));
+			$row = $sth->fetch(PDO::FETCH_ASSOC);
+			if ($row && !empty($row['change_after'])) {
+				$decoded = @json_decode($row['change_after'], true);
+				if (is_array($decoded) && !empty($decoded)) {
+					return $decoded;
+				}
+			}
+		} catch (\Throwable $e) {
+			$this->debugLog('Previous post data lookup failed', array(
+				'error' => $e->getMessage(), 'module' => $display, 'object_id' => $objectId
+			));
+		}
+		return null;
+	}
+
+	/**
+	 * Read the current state of the object being modified via module API.
+	 * Note: due to FreePBX hook ordering, this returns post-modification
+	 * state for doConfigPageInit events. Kept for AJAX/hook events.
 	 */
 	private function readBeforeState($display, $objectId) {
 		if ($objectId === '') {
@@ -1845,27 +1895,28 @@ JSEOF;
 	);
 
 	/**
-	 * Compare before and after state. Only keys present in BOTH
-	 * datasets are compared to avoid false positives from form
-	 * control fields (action, display, CSRF tokens) that only
-	 * exist in the POST data.
+	 * Compare previous POST data against current POST data.
+	 * Keys only in the new POST (not in previous) are reported as added.
+	 * Keys in both are compared; differences are reported as changed.
 	 */
 	private function computeChangeDiff($before, $after) {
 		$diff = array('added' => array(), 'removed' => array(), 'changed' => array());
 		if (!is_array($before) || !is_array($after)) {
 			return $diff;
 		}
-		$skipKeys = array_flip(self::$DIFF_SKIP_KEYS);
 		foreach ($after as $key => $newVal) {
-			if (isset($skipKeys[$key])) {
-				continue;
-			}
 			if (!array_key_exists($key, $before)) {
+				$diff['added'][$key] = $newVal;
 				continue;
 			}
 			$oldVal = $before[$key];
 			if ($this->valuesAreDifferent($oldVal, $newVal)) {
 				$diff['changed'][$key] = array('old' => $oldVal, 'new' => $newVal);
+			}
+		}
+		foreach ($before as $key => $oldVal) {
+			if (!array_key_exists($key, $after)) {
+				$diff['removed'][$key] = $oldVal;
 			}
 		}
 		return $diff;
