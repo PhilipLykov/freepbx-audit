@@ -346,7 +346,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 		$method = strtolower((string) ($_SERVER['REQUEST_METHOD'] ?? ''));
 		$displayLower = strtolower((string) $display);
-		$action = strtolower(trim((string) ($_REQUEST['action'] ?? '')));
+		$action = ($this->originalRequestAction !== '')
+			? $this->originalRequestAction
+			: strtolower(trim((string) ($_REQUEST['action'] ?? '')));
 
 		if ($method === 'get' && !$this->isStateChangingAction($action, 'get')) {
 			$this->cacheModuleEntityNames($displayLower);
@@ -374,7 +376,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 */
 	private function registerShutdownCapture($sessionId, $display, $action, $method = 'post') {
 		$self = $this;
-		$requestSnapshot = $_REQUEST;
+		$requestSnapshot = is_array($this->originalRequestSnapshot)
+			? $this->originalRequestSnapshot
+			: $_REQUEST;
 		$serverSnapshot = array(
 			'REQUEST_METHOD' => strtoupper($method),
 			'REQUEST_URI' => $_SERVER['REQUEST_URI'] ?? ''
@@ -398,7 +402,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'calendarid', 'eventid',
 					'destid', 'custom_exten', 'old_custom_exten',
 					'language_id', 'page_group', 'route_id', 'disa_id',
-					'number', 'oldval',
+					'callback_id', 'cidlookup_id', 'cid_id', 'priority_id',
+					'number', 'oldval', 'speeddial',
 					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
@@ -463,6 +468,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	private function captureGuiPostEvent($sessionId, $display) {
 		try {
+			$requestData = is_array($this->originalRequestSnapshot)
+				? $this->originalRequestSnapshot
+				: $_REQUEST;
 			$rawAction = ($this->originalRequestAction !== '')
 				? $this->originalRequestAction
 				: ($_REQUEST['action'] ?? '');
@@ -493,8 +501,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'object_id' => $displayObjectId,
 				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
-				'request_hash' => $this->hashRequest($_REQUEST),
-				'change' => $this->buildChangePayload($_REQUEST, $previousPost)
+				'request_hash' => $this->hashRequest($requestData),
+				'change' => $this->buildChangePayload($requestData, $previousPost)
 			));
 			$this->eventCapturedThisRequest = true;
 		} catch (\Throwable $e) {
@@ -781,6 +789,36 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'method' => array('Core', 'getAllDIDs'),
 			'id' => array('extension', 'cidnum'),
 			'name' => 'description',
+		),
+		'callback' => array(
+			'method' => array('Callback', 'listCallbacks'),
+			'id' => 'callback_id',
+			'name' => 'description',
+		),
+		'cidlookup' => array(
+			'method' => array('Cidlookup', 'getList'),
+			'id' => 'cidlookup_id',
+			'name' => 'description',
+		),
+		'recordings' => array(
+			'method' => array('Recordings', 'getAll'),
+			'id' => 'id',
+			'name' => 'displayname',
+		),
+		'tts' => array(
+			'method' => array('Tts', 'listTTS'),
+			'id' => 'id',
+			'name' => 'name',
+		),
+		'setcid' => array(
+			'method' => array('Setcid', 'getAll'),
+			'id' => 'cid_id',
+			'name' => 'description',
+		),
+		'superfecta' => array(
+			'method' => array('Superfecta', 'getAllSchemes'),
+			'id' => 'name',
+			'name' => 'name',
 		),
 	);
 
@@ -1312,6 +1350,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 		$objectId = $this->resolveObjectId($displayLower, $objectId);
 
+		$requestData = is_array($this->originalRequestSnapshot)
+			? $this->originalRequestSnapshot
+			: $_REQUEST;
 		$previousPost = null;
 		$changePayload = array(
 			'before' => null, 'after' => null,
@@ -1321,7 +1362,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? '')) === 'POST') {
 			try {
 				$previousPost = $this->getPreviousPostData($moduleName, $objectId);
-				$changePayload = $this->buildChangePayload($_REQUEST, $previousPost);
+				$changePayload = $this->buildChangePayload($requestData, $previousPost);
 			} catch (\Throwable $e) {
 				// Fall back to generic payload
 			}
@@ -1339,7 +1380,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'object_id' => $objectId,
 			'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'POST',
 			'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
-			'request_hash' => $this->hashRequest($_REQUEST),
+			'request_hash' => $this->hashRequest($requestData),
 			'change' => $changePayload
 		));
 		$this->eventCapturedThisRequest = true;
@@ -2179,9 +2220,10 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'announcement_id', 'callrecording_id', 'channel',
 			'group', 'entry', 'list_id', 'entryid',
 			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
-			'route_id', 'trunknum', 'file', 'miscapps_id',
+			'route_id', 'trunknum', 'file', 'miscapps_id', 'speeddial',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'disa_id',
+			'callback_id', 'cidlookup_id', 'cid_id', 'priority_id',
 			'number', 'oldval',
 			'name', 'username',
 		);
@@ -2508,7 +2550,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				}
 			}catch(e){}}
 			if(body&&typeof body==="string"){try{
-				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers","file","path"];
+				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers","file","path","scheme","itemid","callback_id","cidlookup_id","cid_id","priority_id","speeddial"];
 				var bp2=new URLSearchParams(body);
 				var parts=[];
 				for(var ki=0;ki<idKeys.length;ki++){
@@ -3826,6 +3868,9 @@ JSEOF;
 	}
 
 	private function detectObjectId() {
+		$source = is_array($this->originalRequestSnapshot)
+			? $this->originalRequestSnapshot
+			: $_REQUEST;
 		$candidates = array(
 			'id', 'extdisplay', 'account', 'trunkid', 'user_id',
 			'itemid', 'group_id', 'entry_id', 'queue', 'grpnum',
@@ -3839,12 +3884,13 @@ JSEOF;
 			'calendarid', 'eventid',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'route_id', 'disa_id',
-			'number', 'oldval',
+			'callback_id', 'cidlookup_id', 'cid_id', 'priority_id',
+			'number', 'oldval', 'speeddial',
 			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {
-			if (isset($_REQUEST[$key]) && (string) $_REQUEST[$key] !== '') {
-				return $this->truncate((string) $_REQUEST[$key], 256);
+			if (isset($source[$key]) && (string) $source[$key] !== '') {
+				return $this->truncate((string) $source[$key], 256);
 			}
 		}
 		return '';
