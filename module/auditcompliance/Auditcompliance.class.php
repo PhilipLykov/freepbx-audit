@@ -1017,8 +1017,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$params[] = (int) $filters['date_to_unix'];
 		}
 		if (!empty($filters['search_text'])) {
-			$term = '%' . str_replace(array('%', '_'), array('\\%', '\\_'), (string) $filters['search_text']) . '%';
-			$likeEscape = " ESCAPE '\\'";
+			$term = '%' . str_replace(array('!', '%', '_'), array('!!', '!%', '!_'), (string) $filters['search_text']) . '%';
+			$likeEscape = " ESCAPE '!'";
 			$where[] = "(e.module_name LIKE ?" . $likeEscape . " OR e.action LIKE ?" . $likeEscape . " OR e.actor LIKE ?" . $likeEscape . " OR e.object_type LIKE ?" . $likeEscape . " OR e.object_id LIKE ?" . $likeEscape . ")";
 			$params[] = $term;
 			$params[] = $term;
@@ -1386,11 +1386,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			return null;
 		}
 		$dt = \DateTime::createFromFormat('d-m-Y', $value, $tz);
-		if ($dt !== false && !array_sum($dt::getLastErrors())) {
+		$err = ($dt !== false) ? $dt::getLastErrors() : false;
+		if ($dt !== false && ($err === false || !array_sum($err))) {
 			return $dt;
 		}
 		$dt = \DateTime::createFromFormat('Y-m-d', $value, $tz);
-		if ($dt !== false && !array_sum($dt::getLastErrors())) {
+		$err = ($dt !== false) ? $dt::getLastErrors() : false;
+		if ($dt !== false && ($err === false || !array_sum($err))) {
 			return $dt;
 		}
 		return null;
@@ -1442,8 +1444,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$sth->execute(array('failure', 'failure', $last24h));
 			$stats['auth_failures_24h'] = (int) $sth->fetchColumn();
 
-			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE channel = ? AND action LIKE ? ESCAPE '\\' AND occurred_at_unix >= ?");
-			$sth->execute(array('gui', '%\\_access', $last24h));
+			$sth = $pdo->prepare("SELECT COUNT(*) FROM audit_events WHERE channel = ? AND action LIKE ? ESCAPE '!' AND occurred_at_unix >= ?");
+			$sth->execute(array('gui', '%!_access', $last24h));
 			$stats['sensitive_reads_24h'] = (int) $sth->fetchColumn();
 
 			$sth = $pdo->prepare("SELECT actor, COUNT(*) AS cnt FROM audit_events WHERE occurred_at_unix >= ? AND session_phase = ? GROUP BY actor ORDER BY cnt DESC LIMIT 5");
