@@ -2,9 +2,9 @@
 
 | Field    | Value                                    |
 |----------|------------------------------------------|
-| Module   | auditcompliance v17.0.0-alpha            |
-| Date     | 21-02-2026                               |
-| Status   | Draft                                    |
+| Module   | auditcompliance v17.0.0-beta1            |
+| Date     | 25-02-2026                               |
+| Status   | Beta                                     |
 | Audience | Administrators, Operations               |
 
 ---
@@ -203,7 +203,7 @@ Alternatively, configure via the module's settings in the FreePBX config store:
 
 ```bash
 fwconsole ma list | grep auditcompliance
-# Expected: auditcompliance | 17.0.0alpha1 | Enabled | GPLv3+
+# Expected: auditcompliance | 17.0.0beta1 | Enabled | GPLv3+
 ```
 
 ### Check Database Tables

@@ -2,9 +2,9 @@
 
 | Field    | Value                            |
 |----------|----------------------------------|
-| Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 21-02-2026                       |
-| Status   | Draft                            |
+| Module   | auditcompliance v17.0.0-beta1    |
+| Date     | 25-02-2026                       |
+| Status   | Beta                             |
 
 ---
 
@@ -84,6 +84,7 @@
 
 | Date | Changes |
 |------|---------|
+| 25-02-2026 | Version bump to v17.0.0-beta1. Universal AJAX capture, edit-vs-create heuristic fixes, entity cache for 39 modules, sensitive read context enrichment. |
 | 20-02-2026 | Initial documentation suite (v0.1.0-alpha) |
 | 21-02-2026 | Code review fixes documented: LIMIT/OFFSET MySQL fix, PostgreSQL LIKE ESCAPE, Dashboard tab nav, TLS default safety, sensitive reads wildcard fix. All document dates updated. New cross-database test cases added to security test plan. |
 | 20-02-2026 | FreePBX 17 conformance update: shutdown capture safety net, GET-based action capture, self-referential change baselines, 23 sensitive-read pages, Settings GUI, contactmanager hook rename, expanded object ID detection, noise key filtering, semantic value normalization. Architecture, coverage matrix, administrator guide, glossary, test plan, and all documentation updated. |

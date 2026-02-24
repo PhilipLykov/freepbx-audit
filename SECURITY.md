@@ -4,7 +4,8 @@
 
 | Version          | Supported |
 |------------------|-----------|
-| 0.1.0-alpha      | Yes       |
+| 17.0.0-beta1     | Yes       |
+| 0.1.0-alpha      | No        |
 
 Only the latest release receives security updates.
 

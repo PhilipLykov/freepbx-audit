@@ -3,7 +3,7 @@
 	<rawname>auditcompliance</rawname>
 	<repo>standard</repo>
 	<name>Audit Compliance</name>
-	<version>17.0.0alpha1</version>
+	<version>17.0.0beta1</version>
 	<publisher>Internal</publisher>
 	<license>GPLv3+</license>
 	<licenselink>http://www.gnu.org/licenses/gpl-3.0.txt</licenselink>

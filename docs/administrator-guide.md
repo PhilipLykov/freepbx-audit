@@ -2,9 +2,9 @@
 
 | Field    | Value                            |
 |----------|----------------------------------|
-| Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 21-02-2026                       |
-| Status   | Draft                            |
+| Module   | auditcompliance v17.0.0-beta1   |
+| Date     | 25-02-2026                       |
+| Status   | Beta                             |
 | Audience | Administrators                   |
 
 ---

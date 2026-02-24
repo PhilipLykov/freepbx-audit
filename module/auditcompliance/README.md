@@ -1,15 +1,15 @@
 # Audit Compliance Module for FreePBX/pbxACT
 
-![Version](https://img.shields.io/badge/version-17.0.0--alpha-blue)
+![Version](https://img.shields.io/badge/version-17.0.0--beta-blue)
 ![License](https://img.shields.io/badge/license-GPLv3+-green)
 ![PHP](https://img.shields.io/badge/php-%3E%3D7.4-purple)
 ![FreePBX](https://img.shields.io/badge/FreePBX-17.x-orange)
 
 | Field    | Value                            |
 |----------|----------------------------------|
-| Module   | auditcompliance v17.0.0-alpha    |
-| Date     | 21-02-2026                       |
-| Status   | Draft                            |
+| Module   | auditcompliance v17.0.0-beta1    |
+| Date     | 25-02-2026                       |
+| Status   | Beta                             |
 
 Enterprise-grade immutable compliance audit logging for FreePBX 17 / pbxACT Web GUI administrator actions. Provides **universal coverage** across all modules without modifying any native FreePBX/pbxACT core files.
 

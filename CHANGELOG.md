@@ -7,6 +7,8 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+## [17.0.0-beta1] - 25-02-2026
+
 ### Added
 
 - **Universal AJAX body forwarding** -- The JavaScript `extractSnippet()` function now forwards ALL request body parameters (truncated to 4096 chars) instead of cherry-picking from a hardcoded `idKeys` list. This eliminates the need to add module-specific parameters to `idKeys` for every new module, and ensures that AJAX events for any module (including firewall zone/network params, soundlang language/format params, logfiles setting params, and all future modules) automatically include full change details. Falls back to raw body substring on URLSearchParams parse failure.
@@ -155,5 +157,6 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 - Upstream FreePBX analysis of 80 repositories.
 - Security test plan with OWASP test cases, AJAX interceptor validation, and coverage gate checks.
 
-[Unreleased]: https://github.com/PhilipLykov/freepbx-audit/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/PhilipLykov/freepbx-audit/compare/v17.0.0-beta1...HEAD
+[17.0.0-beta1]: https://github.com/PhilipLykov/freepbx-audit/compare/v0.1.0-alpha...v17.0.0-beta1
 [0.1.0-alpha]: https://github.com/PhilipLykov/freepbx-audit/releases/tag/v0.1.0-alpha
