@@ -500,8 +500,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 						$previousPost = $self->getPreviousPostData($display, $objectId);
 						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
 						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)
-							&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)) {
+							&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)
+							&& $objectId === '') {
 							$effectiveAction = 'create';
+						}
+						if ($previousPost === null && !in_array($effectiveAction, array('create', 'add'), true)) {
+							$changePayload['added'] = array();
 						}
 						if ($effectiveAction === 'create' || $effectiveAction === 'add') {
 							$self->cacheModuleEntityNames($displayLower);
@@ -554,7 +558,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$previousPost = $this->getPreviousPostData($display, $objectId);
 
 			if ($previousPost === null && in_array($action, array('update', 'save', 'submit'), true)
-				&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)) {
+				&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)
+				&& $objectId === '') {
 				$action = 'create';
 			}
 
@@ -562,6 +567,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				$this->cacheModuleEntityNames($displayLower);
 			}
 			$displayObjectId = $this->resolveObjectId($displayLower, $objectId);
+
+			$change = $this->buildChangePayload($requestData, $previousPost);
+			if ($previousPost === null && !in_array($action, array('create', 'add'), true)) {
+				$change['added'] = array();
+			}
 
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
@@ -576,7 +586,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
 				'request_hash' => $this->hashRequest($requestData),
-				'change' => $this->buildChangePayload($requestData, $previousPost)
+				'change' => $change
 			));
 			$this->eventCapturedThisRequest = true;
 		} catch (\Throwable $e) {
@@ -693,12 +703,24 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		}
 	}
 
+	private static $SENSITIVE_READ_CONTEXT_KEYS = array(
+		'driver', 'type', 'category', 'section', 'tab',
+		'appid', 'application_id', 'client_id',
+	);
+
 	private function captureSensitiveReadEvent($sessionId, $display, $displayLower) {
 		try {
 			$objectId = $this->detectObjectId();
 			$objectId = $this->resolveObjectId($displayLower, $objectId);
 
 			$readType = self::SENSITIVE_READ_PAGES[$displayLower];
+			$context = array('view' => $readType);
+			foreach (self::$SENSITIVE_READ_CONTEXT_KEYS as $key) {
+				if (!empty($_REQUEST[$key])) {
+					$context[$key] = $this->truncate((string) $_REQUEST[$key], 128);
+				}
+			}
+
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
 				'session_phase' => 'activity',
@@ -715,7 +737,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'change' => array(
 					'before' => null, 'after' => null,
 					'added' => array(), 'removed' => array(),
-					'changed' => array('view' => $readType)
+					'changed' => $context
 				)
 			));
 		} catch (\Throwable $e) {
@@ -920,6 +942,18 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'id' => 'priority_id',
 			'name' => 'priority_name',
 		),
+		'filestore' => array(
+			'method' => array('Filestore', 'listLocations'),
+			'flatten' => 'locations',
+			'id' => 'id',
+			'name' => 'name',
+		),
+		'api' => array(
+			'method' => array('Api', 'getAll'),
+			'subproperty' => 'applications',
+			'id' => 'id',
+			'name' => 'name',
+		),
 	);
 
 	private function cacheModuleEntityNames($moduleLower) {
@@ -938,11 +972,42 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$args = $spec['args'] ?? array();
 
 			$instance = $this->FreePBX->$className;
-			if (!method_exists($instance, $methodName)) {
-				return;
+
+			if (!empty($spec['subproperty'])) {
+				$sub = $spec['subproperty'];
+				try {
+					$subObj = $instance->$sub;
+				} catch (\Throwable $e) {
+					return;
+				}
+				if (!is_object($subObj) || !method_exists($subObj, $methodName)) {
+					return;
+				}
+				$items = call_user_func_array(array($subObj, $methodName), $args);
+			} else {
+				if (!method_exists($instance, $methodName)) {
+					return;
+				}
+				$items = call_user_func_array(array($instance, $methodName), $args);
 			}
 
-			$items = call_user_func_array(array($instance, $methodName), $args);
+			if (!empty($spec['flatten']) && is_array($items) && isset($items[$spec['flatten']])) {
+				$nested = $items[$spec['flatten']];
+				$flat = array();
+				if (is_array($nested)) {
+					foreach ($nested as $group) {
+						if (is_array($group)) {
+							foreach ($group as $entry) {
+								if (is_array($entry)) {
+									$flat[] = $entry;
+								}
+							}
+						}
+					}
+				}
+				$items = $flat;
+			}
+
 			$map = array();
 
 			if (is_array($items)) {
@@ -1517,8 +1582,12 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				$previousPost = $this->getPreviousPostData($display, $objectId);
 				$changePayload = $this->buildChangePayload($requestSnapshot, $previousPost);
 				if ($previousPost === null && in_array($normalizedAction, array('update', 'save', 'submit'), true)
-					&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)) {
+					&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)
+					&& $objectId === '') {
 					$normalizedAction = 'create';
+				}
+				if ($previousPost === null && !in_array($normalizedAction, array('create', 'add'), true)) {
+					$changePayload['added'] = array();
 				}
 			} catch (\Throwable $e) {
 				// Fall back to generic payload
@@ -2448,129 +2517,71 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	 * identifiers and type info from the intercepted POST body.
 	 * Resolves numeric IDs to names using the session entity cache.
 	 */
+	private static $AJAX_NOISE_KEYS = array(
+		'module', 'command', 'restrictmods', 'fw_popover', 'nonce',
+		'fw_csrf_token', '__csrf_token', 'fw_csrf', 'module_hook',
+	);
+
+	private static $AJAX_ID_FIELDS = array(
+		'id', 'ext', 'extension', 'extdisplay', 'account', 'user_id',
+		'trunkid', 'itemid', 'group_id', 'entry_id', 'queue', 'grpnum',
+		'backup_id', 'tcid', 'tgid', 'confno', 'pagegrp', 'pagenbr',
+		'ivr_id', 'faxid', 'calendar_id', 'pinsets_id', 'announcement_id',
+		'callrecording_id', 'miscapps_id', 'destid', 'route_id', 'rg',
+		'disa_id', 'callback_id', 'cidlookup_id', 'cid_id', 'priority_id',
+		'tts_id', 'setcid_id', 'calendarid', 'eventid', 'fileid',
+		'entry', 'entryid', 'list_id', 'cid', 'caid', 'csrref',
+		'cidnum', 'trunknum', 'custom_exten', 'old_custom_exten',
+		'language_id', 'page_group', 'speeddial', 'scheme',
+	);
+
 	private function buildAjaxChangePayload($command, $httpStatus, $body, $moduleLower = '') {
 		$payload = array('command' => $command, 'http_status' => $httpStatus);
 		if ($body !== '') {
 			parse_str($body, $params);
-			if (!empty($params['file'])) {
-				$file = $this->truncate((string) $params['file'], 256);
-				$payload['file'] = $file;
-				if (!empty($params['path'])) {
-					$path = $this->truncate((string) $params['path'], 256);
-					$payload['path'] = $path;
-					$payload['file_path'] = $this->truncate(
-						rtrim($path, '/') . '/' . $file,
-						512
-					);
+			if (!empty($params)) {
+				$noiseKeys = array_flip(self::$AJAX_NOISE_KEYS);
+				$idFields = array_flip(self::$AJAX_ID_FIELDS);
+				foreach ($params as $key => $val) {
+					if (isset($noiseKeys[$key])) {
+						continue;
+					}
+					if ($key === 'action' && (string) $val !== $command) {
+						$payload['sub_action'] = $this->truncate((string) $val, 128);
+						continue;
+					}
+					if ($key === 'action') {
+						continue;
+					}
+					if (is_array($val)) {
+						if (isset($idFields[$key]) || $key === 'extensions') {
+							$resolved = array();
+							foreach (array_slice($val, 0, 20) as $v) {
+								$resolved[] = $this->truncate(
+									$this->resolveObjectId($moduleLower, (string) $v), 128
+								);
+							}
+							$payload[$key] = $resolved;
+						} else {
+							$payload[$key] = array_slice($val, 0, 50);
+						}
+					} elseif ($val === '' || $val === null) {
+						continue;
+					} elseif ($key === 'json' || $key === 'data') {
+						$decoded = @json_decode((string) $val, true);
+						if (is_array($decoded) && !empty($decoded)) {
+							$payload[$key] = $decoded;
+						} else {
+							$payload[$key] = $this->truncate((string) $val, 1024);
+						}
+					} elseif (isset($idFields[$key])) {
+						$payload[$key] = $this->truncate(
+							$this->resolveObjectId($moduleLower, (string) $val), 256
+						);
+					} else {
+						$payload[$key] = $this->truncate((string) $val, 512);
+					}
 				}
-			}
-			if (!empty($params['type'])) {
-				$payload['type'] = $this->truncate((string) $params['type'], 128);
-			}
-			if (!empty($params['extensions']) && is_array($params['extensions'])) {
-				$resolved = array();
-				foreach (array_slice($params['extensions'], 0, 20) as $v) {
-					$name = $this->resolveObjectId($moduleLower, (string) $v);
-					$resolved[] = $this->truncate($name, 128);
-				}
-				$payload['target_ids'] = $resolved;
-			}
-			if (!empty($params['number'])) {
-				$payload['number'] = $this->truncate((string) $params['number'], 256);
-			}
-			if (!empty($params['description'])) {
-				$payload['description'] = $this->truncate((string) $params['description'], 256);
-			}
-			if (!empty($params['oldval'])) {
-				$payload['oldval'] = $this->truncate((string) $params['oldval'], 256);
-			}
-			if (!empty($params['numbers'])) {
-				$decoded = @json_decode((string) $params['numbers'], true);
-				if (is_array($decoded) && !empty($decoded)) {
-					$payload['target_numbers'] = array_slice($decoded, 0, 20);
-				}
-			}
-			if (!empty($params['name'])) {
-				$payload['name'] = $this->truncate((string) $params['name'], 256);
-			}
-			if (!empty($params['username'])) {
-				$payload['username'] = $this->truncate((string) $params['username'], 256);
-			}
-			if (!empty($params['id'])) {
-				$payload['target_id'] = $this->truncate(
-					$this->resolveObjectId($moduleLower, (string) $params['id']),
-					256
-				);
-			}
-			if (!empty($params['setting'])) {
-				$payload['setting'] = $this->truncate((string) $params['setting'], 128);
-			}
-			if (isset($params['val']) && (string) $params['val'] !== '') {
-				$payload['new_value'] = $this->truncate((string) $params['val'], 512);
-			}
-			if (!empty($params['namefile'])) {
-				$payload['log_file'] = $this->truncate((string) $params['namefile'], 256);
-			}
-			if (!empty($params['log_file'])) {
-				$payload['log_file'] = $this->truncate((string) $params['log_file'], 256);
-			}
-			if (!empty($params['data'])) {
-				$decoded = @json_decode((string) $params['data'], true);
-				if (is_array($decoded) && !empty($decoded)) {
-					$payload['configuration'] = $decoded;
-				} else {
-					$payload['data'] = $this->truncate((string) $params['data'], 1024);
-				}
-			}
-			if (!empty($params['network'])) {
-				$payload['network'] = $this->truncate((string) $params['network'], 128);
-			}
-			if (!empty($params['host'])) {
-				$payload['host'] = $this->truncate((string) $params['host'], 256);
-			}
-			if (!empty($params['ip'])) {
-				$payload['ip'] = $this->truncate((string) $params['ip'], 128);
-			}
-			if (!empty($params['scheme'])) {
-				$payload['scheme'] = $this->truncate((string) $params['scheme'], 256);
-			}
-			if (!empty($params['scheme_name'])) {
-				$payload['scheme_name'] = $this->truncate((string) $params['scheme_name'], 256);
-			}
-			if (!empty($params['source'])) {
-				$payload['source'] = $this->truncate((string) $params['source'], 256);
-			}
-			if (!empty($params['state'])) {
-				$payload['state'] = $this->truncate((string) $params['state'], 64);
-			}
-			if (!empty($params['blockType'])) {
-				$payload['block_type'] = $this->truncate((string) $params['blockType'], 64);
-			}
-			if (!empty($params['destination'])) {
-				$payload['destination'] = $this->truncate((string) $params['destination'], 256);
-			}
-			if (!empty($params['categoryid'])) {
-				$payload['category_id'] = $this->truncate((string) $params['categoryid'], 128);
-			}
-			if (!empty($params['priority_name'])) {
-				$payload['priority_name'] = $this->truncate((string) $params['priority_name'], 256);
-			}
-			if (!empty($params['fileid'])) {
-				$payload['file_id'] = $this->truncate((string) $params['fileid'], 256);
-			}
-			if (!empty($params['filepath'])) {
-				$payload['file_path'] = $this->truncate((string) $params['filepath'], 512);
-			}
-			if (!empty($params['action']) && !isset($payload['command'])) {
-				$payload['sub_action'] = $this->truncate((string) $params['action'], 128);
-			} elseif (!empty($params['action']) && (string) $params['action'] !== $command) {
-				$payload['sub_action'] = $this->truncate((string) $params['action'], 128);
-			}
-			if (!empty($params['dlg_mode'])) {
-				$payload['dialog_mode'] = $this->truncate((string) $params['dlg_mode'], 64);
-			}
-			if (!empty($params['fw_popover_process'])) {
-				$payload['popover_module'] = $this->truncate((string) $params['fw_popover_process'], 128);
 			}
 		}
 		return $this->redactSensitiveData($payload);
@@ -2742,7 +2753,6 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 (function(){
 	"use strict";
 	var AUDIT_AJAX="ajax.php?module=auditcompliance&command=";
-	var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers","file","path","scheme","scheme_name","source","itemid","callback_id","cidlookup_id","cid_id","priority_id","priority_name","speeddial","setting","val","namefile","data","log_file","network","host","ip","state","blockType","destination","categoryid","fileid","filepath","certaction","submittype","day","time","key","value","replace"];
 
 	function parseModCmd(u,body){
 		var mod="",cmd="";
@@ -2759,17 +2769,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		try{
 			var bp=new URLSearchParams(body);
 			var parts=[];
-			for(var i=0;i<idKeys.length;i++){var vals=bp.getAll(idKeys[i]);if(vals.length>0){for(var j=0;j<Math.min(vals.length,10);j++){parts.push(idKeys[i]+"="+vals[j]);}}}
-			if(bp.get("command"))parts.push("command="+bp.get("command"));
-			if(bp.get("type"))parts.push("type="+bp.get("type"));
-			if(bp.get("action"))parts.push("action="+bp.get("action"));
-			if(bp.get("svc"))parts.push("svc="+bp.get("svc"));
-			if(bp.get("zone"))parts.push("zone="+bp.get("zone"));
-			if(bp.get("protocol"))parts.push("protocol="+bp.get("protocol"));
-			if(bp.get("fw_popover_process"))parts.push("fw_popover_process="+bp.get("fw_popover_process"));
-			if(bp.get("dlg_mode"))parts.push("dlg_mode="+bp.get("dlg_mode"));
-			return parts.join("&").substring(0,2048);
-		}catch(e){return"";}
+			bp.forEach(function(val,key){if(key&&val!==undefined&&val!=="")parts.push(encodeURIComponent(key)+"="+encodeURIComponent(val));});
+			return parts.join("&").substring(0,4096);
+		}catch(e){
+			return body.substring(0,4096);
+		}
 	}
 
 	function sendAuditBeacon(mod,cmd,method,url,status,bodySnippet){
