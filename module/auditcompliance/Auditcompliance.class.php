@@ -553,6 +553,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			$objectId = $this->detectObjectId();
 			$displayLower = strtolower((string) $display);
 			$objectId = $this->resolveObjectId($displayLower, $objectId);
+			$requestData = is_array($this->originalRequestSnapshot)
+				? $this->originalRequestSnapshot
+				: $_REQUEST;
 
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
@@ -566,7 +569,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'object_id' => $objectId,
 				'request_method' => 'GET',
 				'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
-				'request_hash' => $this->hashRequest($_REQUEST),
+				'request_hash' => $this->hashRequest($requestData),
 				'change' => array(
 					'before' => null,
 					'after' => null,
@@ -2219,7 +2222,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'faxid', 'calendar_id', 'pinsets_id', 'scheme',
 			'announcement_id', 'callrecording_id', 'channel',
 			'group', 'entry', 'list_id', 'entryid',
-			'cid', 'caid', 'fileid', 'calendarid', 'eventid',
+			'cid', 'caid', 'csrref', 'fileid', 'calendarid', 'eventid',
 			'route_id', 'trunknum', 'file', 'miscapps_id', 'speeddial',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'disa_id',
