@@ -272,12 +272,13 @@ $esc = function ($v) { return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8')
 				<form method="get" class="form-inline" style="display:flex;gap:10px;align-items:flex-end;width:100%;">
 					<input type="hidden" name="display" value="auditcompliance"/>
 					<input type="hidden" name="view" value="timeline"/>
-					<div class="form-group">
-						<label for="actor"><i class="fa fa-user" style="margin-right:3px;"></i> <?php echo _('Actor'); ?></label>
-						<input type="text" id="actor" name="actor"
-							value="<?php echo $esc($actorFilter); ?>"
-							class="form-control input-sm"
-							placeholder="<?php echo _('Filter by user...'); ?>"/>
+				<div class="form-group" style="display:flex;align-items:center;gap:8px;">
+					<label for="actor" style="margin-bottom:0;white-space:nowrap;"><i class="fa fa-user" style="margin-right:3px;"></i> <?php echo _('Actor'); ?></label>
+					<input type="text" id="actor" name="actor"
+						value="<?php echo $esc($actorFilter); ?>"
+						class="form-control input-sm"
+						style="min-width:180px;"
+						placeholder="<?php echo _('Filter by user...'); ?>"/>
 					</div>
 					<button type="submit" class="btn btn-primary btn-sm">
 						<i class="fa fa-filter"></i> <?php echo _('Filter'); ?>
