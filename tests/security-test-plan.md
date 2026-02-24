@@ -107,7 +107,7 @@ Includes universal capture architecture validation (AJAX interceptor, deduplicat
 | DD-02 | Sequential distinct actions | Edit extension, then edit trunk | Both events recorded (different module/action) |
 | DD-03 | Same action after dedup window | Edit same extension, wait 5s, edit again | Both events recorded (outside 3s window) |
 
-### Sensitive Read Validation (22 pages)
+### Sensitive Read Validation (23 pages)
 
 | # | Test Case | Method | Expected Result |
 |---|-----------|--------|-----------------|
@@ -134,6 +134,37 @@ Includes universal capture architecture validation (AJAX interceptor, deduplicat
 | SR-21 | Blacklist page access | Navigate to blacklist | Event with `action=blacklist_personal_access`, `channel=gui` |
 | SR-22 | CEL page access | Navigate to cel | Event with `action=cel_data_access`, `channel=gui` |
 | SR-23 | Day/Night page access | Navigate to daynight | Event with `action=daynight_credentials_access`, `channel=gui` |
+| SR-24 | Calendar Groups page access | Navigate to calendargroups | Event with `action=calendar_credentials_access`, `channel=gui` |
+| SR-25 | Log Files Settings page access | Navigate to logfiles_settings | Event with `action=system_log_access`, `channel=gui` |
+
+### GET-Based State-Changing Action Tests
+
+| # | Test Case | Method | Expected Result |
+|---|-----------|--------|-----------------|
+| GA-01 | Delete Ring Group via action bar | Click delete on a Ring Group | Event recorded with `channel=gui`, `action=delGRP`, `request_method=GET` |
+| GA-02 | Delete Announcement via action bar | Click delete on an Announcement | Event recorded with `channel=gui`, state-changing action detected |
+| GA-03 | Delete Misc Destination | Click delete on Misc Destination | Event recorded (may fire via shutdown capture if module exits early) |
+| GA-04 | Delete Trunk | Delete a trunk via action bar | Event recorded (shutdown capture safety net) |
+| GA-05 | Copy/duplicate action | Use copy/duplicate feature where available | Event recorded with action prefix `copy` or `duplicate` |
+
+### Shutdown Capture Safety Net Tests
+
+| # | Test Case | Method | Expected Result |
+|---|-----------|--------|-----------------|
+| SC-01 | Module that calls redirect_standard() | Edit/delete a Trunk | Event captured via shutdown function |
+| SC-02 | Module that calls exit() early | Edit/delete a Misc Destination | Event captured via shutdown function |
+| SC-03 | Normal module (no early exit) | Edit an Extension | Event captured via primary handler (NOT shutdown); `eventCapturedThisRequest=true` prevents double-log |
+| SC-04 | Deduplication between primary and shutdown | Edit normally | Only ONE event recorded, not two |
+
+### Change Diff Validation Tests
+
+| # | Test Case | Method | Expected Result |
+|---|-----------|--------|-----------------|
+| CD-01 | First edit of new object | Create a Ring Group, then edit it | First event shows "Added Fields" (no prior baseline); second event shows specific changes |
+| CD-02 | Subsequent edit shows diff | Edit same Ring Group twice | Second edit shows "Changed" fields with old → new values |
+| CD-03 | Noise keys filtered | Edit any object | `display`, `action`, `Submit`, CSRF tokens not in diff output |
+| CD-04 | Semantic normalization | Change value from empty to `0` | NOT shown as a change (both are "falsy") |
+| CD-05 | Sensitive fields redacted in diffs | Change a password field | `***REDACTED***` in diff, not the actual password |
 
 ## DB Immutability Evidence
 
@@ -195,7 +226,7 @@ Scalar values truncated to 2048 characters.
 | CG-03 | AJAX interceptor active on all pages | Inspect page source on 5 different module pages | JS interceptor present |
 | CG-04 | Discovery tool runs clean | `php discover-pbxact-surfaces.php --json` | Valid JSON output, all modules enumerated |
 | CG-05 | No new uncovered modules | Discovery output | No module with unexpected surface gaps |
-| CG-06 | All 22 sensitive read pages | Navigate to each page in the sensitive registry | GET events recorded for all 22 pages |
+| CG-06 | All 23 sensitive read pages | Navigate to each page in the sensitive registry | GET events recorded for all 23 pages |
 | CG-07 | Tier-2 hook integration | Perform CRUD on timeconditions, contactmanager, UCP | Events recorded with `channel=hook` |
 
 ### Tier-2 Hook Integration Tests
@@ -206,7 +237,7 @@ Scalar values truncated to 2048 characters.
 | T2-02 | Edit time condition | Modify a time condition | Event with `action=editTimeCondition` |
 | T2-03 | Delete time condition | Delete a time condition | Event with `action=delTimeCondition` |
 | T2-04 | Add contact group | Create contact group via contact manager | Event with `channel=hook`, `module_name=contactmanager`, `action=addGroup` |
-| T2-05 | Add contact entry | Create contact entry | Event with `action=addEntry` |
+| T2-05 | Add contact entry | Create contact entry | Event with `action=addEntryByGroupID` |
 | T2-06 | Delete contact entry | Delete a contact entry | Event with `action=deleteEntryByID` |
 | T2-07 | Add UCP user | Create UCP user | Event with `channel=hook`, `module_name=ucp`, `action=addUser` |
 | T2-08 | Update UCP group | Modify UCP group | Event with `action=updateGroup` |

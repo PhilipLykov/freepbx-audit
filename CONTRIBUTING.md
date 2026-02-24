@@ -84,7 +84,7 @@ FreePBX instance before merging.
 ### Integration Testing
 
 1. Install the module on a FreePBX 17.x staging instance.
-2. Verify all 4 GUI views load without errors.
+2. Verify all 5 GUI views load without errors (Dashboard, Search, Timeline, Discovery, Settings).
 3. Perform CRUD operations on hooked modules and confirm events appear.
 4. Run the Module Discovery view and confirm no unexpected gaps.
 5. Verify export (CSV/JSON) produces valid output.

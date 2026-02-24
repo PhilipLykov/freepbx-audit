@@ -12,7 +12,8 @@
 ## FreePBX Config Store Settings
 
 These settings are stored in the FreePBX key-value store (`astdb`) and can be set via
-`fwconsole setting` or the FreePBX Advanced Settings GUI.
+`fwconsole setting`, the FreePBX Advanced Settings GUI, or the module's built-in
+**Settings** view (**Reports > Audit Compliance > Settings**).
 
 > **Implementation note**: All config reads use the internal `getConfigSafe($key, $default)`
 > helper, which treats `null`, `false`, and empty string returns from `getConfig()` uniformly.
@@ -202,3 +203,26 @@ Consider reducing the idle timeout for stricter session control:
 ```bash
 fwconsole setting AUDITCOMPLIANCE_SESSION_IDLE_TIMEOUT_SECONDS "900"  # 15 minutes
 ```
+
+---
+
+## Settings GUI Reference
+
+The **Settings** view (**Reports > Audit Compliance > Settings**) provides a graphical
+alternative to CLI configuration. The following settings are managed through the GUI:
+
+| GUI Field | Config Key | Notes |
+|-----------|-----------|-------|
+| Connection Type | `audit_db_type` | `mysql` (Direct MySQL/MariaDB), `pgsql` (Direct PostgreSQL), or `odbc` (ODBC) |
+| Hostname | (part of `audit_db_dsn`) | Parsed from or assembled into the DSN |
+| Port | (part of `audit_db_dsn`) | Default: 3306 (MySQL) or 5432 (PostgreSQL) |
+| Database Name | (part of `audit_db_dsn`) | Default: `auditcompliance` |
+| Username | `audit_db_user` | Same as CLI `AUDITCOMPLIANCE_DB_USER` |
+| Password | `audit_db_password` | Same as CLI `AUDITCOMPLIANCE_DB_PASSWORD` |
+| Require TLS | `audit_db_require_tls` | Toggle for TLS enforcement |
+| ODBC DSN Name | (part of `audit_db_dsn`) | For ODBC connection type only |
+| ODBC Backend | `audit_db_odbc_backend` | For ODBC connection type only (`mysql` or `pgsql`) |
+
+The GUI assembles the appropriate PDO DSN from the individual field values. The **Test
+Connection** button validates connectivity without saving. CSRF protection is applied
+independently from the FreePBX framework using a session-bound token and `hash_equals()`.

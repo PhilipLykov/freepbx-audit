@@ -120,3 +120,5 @@
 | Clock tampering affects timestamp accuracy | Low | Use NTP synchronization; audit DB server should have independent time source |
 | FreePBX framework vulnerability bypasses auth | Medium | Dependent on upstream security; module adds defense-in-depth via RBAC checks |
 | Modules that don't call `processHooks()` have gap in hook-based capture | Low | Covered by `doConfigPageInit` for GUI submissions; AJAX-only paths documented in coverage matrix |
+| Modules that `exit()` before audit hook fires | Medium | `register_shutdown_function` safety net captures events after early termination; covers both POST and GET state-changing actions |
+| GET-based state changes bypass POST-only capture | Medium | `captureGuiGetActionEvent()` detects state-changing actions on GET requests via `STATE_CHANGING_PREFIXES` matching |

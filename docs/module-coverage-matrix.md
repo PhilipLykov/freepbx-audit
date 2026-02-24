@@ -26,7 +26,9 @@ The audit module implements a **multi-channel capture strategy** that achieves n
 Channel         Mechanism                              Scope
 -----------     ------------------------------------   -----------------------------------------
 GUI             doConfigPageInit() on POST             All active module pages (dynamic)
-GUI (read)      doConfigPageInit() on GET              22 designated sensitive pages
+GUI (read)      doConfigPageInit() on GET              23 designated sensitive pages
+GUI (action)    doConfigPageInit() on GET              State-changing actions (del/copy/submit)
+Shutdown        register_shutdown_function             Safety net for early exit()/redirect()
 AJAX            Client-side XHR interceptor            ALL ajax.php POST/PUT/DELETE calls
 HOOK            module.xml <hooks> declarations        38 methods across 10 modules
 AUTH            ensureSessionState() + JS beacon       Login/logout/timeout/failure
@@ -62,7 +64,7 @@ The JS interceptor patches `XMLHttpRequest.prototype.open/send` on every admin p
 
 ---
 
-## Sensitive Read Coverage (21 pages)
+## Sensitive Read Coverage (23 pages)
 
 | Page | Read Type | Sensitive Data | Channel | Status |
 |------|-----------|---------------|---------|--------|
@@ -87,6 +89,8 @@ The JS interceptor patches `XMLHttpRequest.prototype.open/send` on every admin p
 | `phonebook` | Phonebook personal access | Personal contact info (GDPR) | GUI (GET) | **Covered** |
 | `blacklist` | Blacklist personal access | Phone numbers (personal data) | GUI (GET) | **Covered** |
 | `cel` | CEL data access | Call event log records | GUI (GET) | **Covered** |
+| `calendargroups` | Calendar group credentials access | CalDAV/OAuth credentials | GUI (GET) | **Covered** |
+| `logfiles_settings` | Log settings access | System log configuration | GUI (GET) | **Covered** |
 
 ---
 
@@ -119,7 +123,7 @@ The JS interceptor patches `XMLHttpRequest.prototype.open/send` on every admin p
 | **contactmanager** | addGroup | Create contact group |
 | **contactmanager** | updateGroup | Update contact group |
 | **contactmanager** | deleteGroupByID | Delete contact group |
-| **contactmanager** | addEntry | Create contact entry |
+| **contactmanager** | addEntryByGroupID | Create contact entry |
 | **contactmanager** | updateEntry | Update contact entry |
 | **contactmanager** | deleteEntryByID | Delete contact entry |
 | **ucp** | addGroup | Create UCP group |
@@ -290,8 +294,29 @@ Before marking a FreePBX/pbxACT update as compatible:
 2. Verify `myConfigPageInits()` returns all active module pages
 3. Check `module.xml` hooks resolve correctly for all 10 hooked modules (38 methods)
 4. Run the Module Discovery view and confirm no new modules have unexpected surface gaps
-5. Validate all 22 sensitive-read pages are detected on GET
+5. Validate all 23 sensitive-read pages are detected on GET
 6. Execute security test plan scenarios for each coverage tier
 7. Update this matrix with pass/fail evidence and timestamp
 
 Last validated: 20-02-2026 (Europe/Chisinau)
+
+---
+
+## Change Tracking Architecture
+
+### Self-Referential Baseline
+
+The module stores the filtered POST data (`change_after`) with each event. On subsequent edits to the same object, this stored data serves as the "before" state for change diffs. This approach:
+
+- Eliminates dependency on FreePBX module-specific API methods for reading current state
+- Avoids the hook execution order problem where the target module updates its DB before the audit hook fires
+- Provides consistent field formats between before and after states
+
+### Shutdown Capture Safety Net
+
+Some modules (e.g., Trunks, Misc Destinations) call `redirect_standard()` or `exit()` immediately after processing. The audit module registers a `shutdown_function` for all state-changing requests:
+
+1. On every state-changing request (POST or GET with recognized action prefix), `registerShutdownCapture()` is called
+2. If the primary capture (`captureGuiPostEvent` or `captureGuiGetActionEvent`) fires successfully, it sets `eventCapturedThisRequest = true`
+3. If the request terminates early (exit/redirect), the shutdown function checks the flag and captures the event if it was missed
+4. Both capture paths feed through `routeEvent()` for uniform deduplication and persistence

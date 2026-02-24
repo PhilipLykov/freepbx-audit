@@ -79,7 +79,11 @@ fwconsole reload
 
 ## 3. Configure the Remote Database Connection
 
-After installation, set the DSN and credentials via FreePBX Advanced Settings or `fwconsole`:
+After installation, configure the database connection via one of three methods:
+
+- **Settings GUI** (recommended): Navigate to **Reports > Audit Compliance > Settings** and use the graphical interface to configure connection type, hostname, port, database name, credentials, and TLS settings. Includes a connection test button.
+- **CLI**: Use `fwconsole setting` commands as shown below.
+- **FreePBX Advanced Settings**: Set the config keys via the advanced settings GUI.
 
 ```bash
 # MariaDB example

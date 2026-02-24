@@ -50,11 +50,13 @@ graph LR
 
     subgraph module ["Auditcompliance Module"]
         PageInit["doConfigPageInit()"]
+        ShutdownCapture["registerShutdownCapture()"]
         SessionMgr["Session Manager"]
         RouteEvent["routeEvent() Central Router"]
         DedupCheck["Deduplication Check"]
         Redactor["redactSensitiveData()"]
         EventWriter["appendAuditEvent()"]
+        ChangeDiff["buildChangePayload()"]
         HookHandlers["38 Hook Handlers"]
         AjaxHandlers["7 AJAX Handlers"]
         SchemaManager["ensureAuditSchema()"]
@@ -73,17 +75,22 @@ graph LR
         Search["search.php"]
         Timeline["grid.php"]
         DiscoveryView["discovery.php"]
+        SettingsView["settings.php"]
     end
 
     LogoutJS -->|recordLogout| AjaxHandlers
     AjaxJS -->|recordInterceptedAjax| AjaxHandlers
     PageInit --> SessionMgr
+    PageInit --> ShutdownCapture
     PageInit --> RouteEvent
+    ShutdownCapture -.->|"safety net (if exit)"| RouteEvent
     HookHandlers --> RouteEvent
     AjaxHandlers --> RouteEvent
     RouteEvent --> DedupCheck
     RouteEvent --> Redactor
     RouteEvent --> EventWriter
+    RouteEvent --> ChangeDiff
+    ChangeDiff --> Redactor
     EventWriter --> SchemaManager
     EventWriter --> AuditDB2
     SessionMgr --> SessionDB
@@ -106,10 +113,12 @@ redaction, and persistence regardless of the event source.
 flowchart TD
     subgraph channels ["Capture Channels"]
         GUI["GUI Channel: doConfigPageInit on POST"]
+        GUIGet["GUI GET Action: doConfigPageInit on GET for state-changing actions"]
         GUIRead["GUI Read: doConfigPageInit on GET for sensitive pages"]
         AJAX["AJAX Channel: JS XHR interceptor beacon"]
         HOOK["Hook Channel: module.xml BMO hooks"]
         AUTH["Auth Channel: session boundary detection"]
+        SHUTDOWN["Shutdown Safety Net: register_shutdown_function"]
     end
 
     RouteEvt["routeEvent()"]
@@ -121,10 +130,12 @@ flowchart TD
     MarkActivity["markSessionActivity()"]
 
     GUI --> RouteEvt
+    GUIGet --> RouteEvt
     GUIRead --> RouteEvt
     AJAX --> RouteEvt
     HOOK --> RouteEvt
     AUTH --> RouteEvt
+    SHUTDOWN -.->|"if primary capture missed"| RouteEvt
     RouteEvt --> Dedup
     Dedup -->|new event| Redact
     Dedup -->|duplicate| Discard["Discard"]
@@ -226,3 +237,7 @@ graph TD
 | **Inline LIMIT/OFFSET** | Pagination values are sanitized via `max()/min()` casts and inlined into SQL strings instead of using PDO bound parameters, preventing `SQLSTATE[42000]` syntax errors on MySQL with `ATTR_EMULATE_PREPARES = true` (default PHP < 8.1) |
 | **Explicit LIKE ESCAPE clause** | All `LIKE` queries specify `ESCAPE '\'` for correct wildcard escaping on PostgreSQL where `standard_conforming_strings = on` (default since 9.1) removes the implicit backslash escape |
 | **Resilient config retrieval** | `getConfigSafe()` wraps FreePBX `getConfig()` to handle `null`, `false`, and empty string returns consistently, preventing silent TLS disablement when config store returns `false` for unset keys |
+| **Shutdown capture safety net** | `register_shutdown_function` fires even after `exit()` or `redirect_standard()`, catching events from modules (Trunks, Misc Destinations) that terminate early before the main capture logic runs |
+| **GET-based action capture** | FreePBX's action bar triggers deletes via GET redirects (`location.href = delLink`); the module now detects state-changing actions on GET requests using `STATE_CHANGING_PREFIXES` matching |
+| **Self-referential change baseline** | Instead of reading the live FreePBX DB (unreliable due to hook execution order), the module stores each event's POST data and uses it as the baseline for subsequent diffs; eliminates dependency on module-specific API methods |
+| **Semantic value normalization** | Comparing before/after states uses intelligent normalization (`areBothFalsy`, `normalizeListValue`) to suppress false-positive diffs from format differences (e.g., `"0"` vs `""`, newline vs hyphen separators) |

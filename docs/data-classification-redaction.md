@@ -77,7 +77,7 @@ Non-scalar: Objects and resources are silently excluded from the output (request
 
 | Channel | Source | Capture Method |
 |---------|--------|---------------|
-| `gui` | FreePBX Web GUI form submissions | `doConfigPageInit()` on POST requests |
+| `gui` | FreePBX Web GUI form submissions and state-changing GET actions | `doConfigPageInit()` on POST requests and GET requests with recognized action prefixes (del, add, edit, copy, submit, etc.) |
 | `hook` | BMO cross-module hook calls | `module.xml <hooks>` + `captureHookEvent()` |
 | `ajax` | AJAX-driven module operations | Universal JS `XMLHttpRequest` interceptor + `recordInterceptedAjax` AJAX endpoint |
 | `rest` | REST API calls | Future: API middleware adapter |

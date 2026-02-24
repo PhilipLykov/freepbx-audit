@@ -56,13 +56,23 @@ Admin --> FreePBX GUI --> Capture Channels --> routeEvent() --> Dedup --> Audit 
 
 | Channel | Mechanism | Scope |
 |---------|-----------|-------|
-| **GUI** | `doConfigPageInit()` on POST | All active module pages (dynamic enumeration) |
-| **GUI Read** | `doConfigPageInit()` on GET | 21 sensitive pages (credentials, personal data, logs) |
+| **GUI POST** | `doConfigPageInit()` on POST | All active module pages (dynamic enumeration) |
+| **GUI GET Action** | `doConfigPageInit()` on GET | State-changing actions (delete, copy, submit) on any module page |
+| **GUI Read** | `doConfigPageInit()` on GET | 23 sensitive pages (credentials, personal data, logs) |
 | **AJAX** | Client-side XHR interceptor (patches XMLHttpRequest) | **ALL** `ajax.php` POST/PUT/DELETE calls for **any** module |
 | **Hook** | `module.xml <hooks>` declarations | 38 methods across 10 modules (core, userman, backup, certman, voicemail, timeconditions, contactmanager, ucp, calendar, bulkhandler) |
 | **Auth** | Session state detection + JS logout beacon | Login, logout, timeout, auth failure |
+| **Shutdown** | `register_shutdown_function` safety net | Catches events from modules that `exit()` before audit hook completes |
 
 The AJAX interceptor is the key to universal coverage: it monitors all AJAX calls to `ajax.php` from the browser, regardless of which module originates them. This covers firewall operations, backup triggers, recording management, and any future module that uses AJAX.
+
+### Shutdown Safety Net
+
+Some modules (e.g., Trunks, Misc Destinations) call `redirect_standard()` or `exit()` before the audit hook completes. The module registers a `shutdown_function` for all state-changing requests that captures the event if the primary capture was missed, with deduplication to prevent double-logging.
+
+### Before/After Change Diffs
+
+The module tracks exact changes using a self-referential baseline: each event stores the processed POST data, and subsequent edits compare against this stored baseline. This produces reliable "old value → new value" diffs with semantic normalization to suppress false positives.
 
 ### Cross-Channel Deduplication
 
@@ -71,13 +81,15 @@ When the same action fires through multiple channels (e.g., a POST that triggers
 ## Features
 
 - **52+ modules covered**: Full Tier-1/2/3 coverage across all official FreePBX/pbxACT modules
-- **Multi-channel event capture**: GUI + universal AJAX interceptor + BMO hooks + auth events
+- **Multi-channel event capture**: GUI POST + GUI GET actions + universal AJAX interceptor + BMO hooks + auth events + shutdown safety net
+- **Before/after change diffs**: Self-referential baseline tracking shows exact field-level changes with semantic normalization
 - **Append-only immutable storage**: DB triggers prevent UPDATE/DELETE; least-privilege DB role
 - **Session-grouped timeline**: Events correlated by admin session with login/logout/timeout boundaries
 - **Remote database support**: MariaDB 10.5+ and PostgreSQL 14+ via TLS-enforced PDO or ODBC
+- **Settings GUI**: Graphical configuration of audit database connection with connection testing
 - **Full search GUI**: Multi-dimensional filtering, sortable columns, pagination
 - **Export**: CSV and JSON with rate limiting (5000 row cap, 10s cooldown)
-- **Sensitive read auditing**: 21 pages covering CDR, recordings, credentials, PINs, logs, personal data
+- **Sensitive read auditing**: 23 pages covering CDR, recordings, credentials, PINs, logs, personal data
 - **Module Discovery**: Built-in tool to enumerate all installed modules and their audit surfaces
 - **RBAC**: Section-based permission check on page and all AJAX endpoints
 - **Sensitive data redaction**: Passwords, tokens, API keys automatically masked
@@ -123,7 +135,7 @@ The full documentation suite is available at [docs/README.md](../../docs/README.
 | Document | Description |
 |----------|-------------|
 | [Deployment Guide](../../docs/deployment-guide.md) | Installation, database setup, configuration, verification |
-| [Administrator Guide](../../docs/administrator-guide.md) | GUI walkthrough of all 4 views and export |
+| [Administrator Guide](../../docs/administrator-guide.md) | GUI walkthrough of all 5 views and export |
 | [Configuration Reference](../../docs/configuration-reference.md) | All settings with types, defaults, examples |
 | [Troubleshooting](../../docs/troubleshooting.md) | Symptom-based diagnostics, known limitations, FAQ |
 | [Operations Runbook](../../docs/operations-runbook.md) | Health checks, monitoring, alerting, capacity planning |

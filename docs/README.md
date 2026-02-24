@@ -14,7 +14,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [Administrator Guide](administrator-guide.md) | GUI walkthrough of Dashboard, Search, Timeline, and Discovery views; export procedures |
+| [Administrator Guide](administrator-guide.md) | GUI walkthrough of Dashboard, Search, Timeline, Discovery, and Settings views; export procedures |
 | [Deployment Guide](deployment-guide.md) | Installation, database setup, configuration, verification, RBAC, networking |
 | [Rollback Guide](rollback-guide.md) | Safe module disable/removal and data preservation |
 | [Troubleshooting](troubleshooting.md) | Symptom-based diagnostics, known limitations, FAQ |
@@ -86,3 +86,4 @@
 |------|---------|
 | 20-02-2026 | Initial documentation suite (v0.1.0-alpha) |
 | 21-02-2026 | Code review fixes documented: LIMIT/OFFSET MySQL fix, PostgreSQL LIKE ESCAPE, Dashboard tab nav, TLS default safety, sensitive reads wildcard fix. All document dates updated. New cross-database test cases added to security test plan. |
+| 20-02-2026 | FreePBX 17 conformance update: shutdown capture safety net, GET-based action capture, self-referential change baselines, 23 sensitive-read pages, Settings GUI, contactmanager hook rename, expanded object ID detection, noise key filtering, semantic value normalization. Architecture, coverage matrix, administrator guide, glossary, test plan, and all documentation updated. |

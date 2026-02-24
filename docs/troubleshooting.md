@@ -129,7 +129,7 @@ psql -U postgres auditcompliance -c "
 
 ## Recently Resolved Issues
 
-These issues were identified during code review (21-02-2026) and fixed in the Unreleased version:
+### Code review round 1 (21-02-2026)
 
 | Issue | Impact | Resolution |
 |-------|--------|------------|
@@ -139,6 +139,21 @@ These issues were identified during code review (21-02-2026) and fixed in the Un
 | TLS silently disabled | `getConfig()` returning `false` bypassed null coalesce, yielding `requireTls = false` | New `getConfigSafe()` helper defaults to TLS enabled |
 | Dashboard missing tab nav | Dashboard was the only view without the 4-tab navigation bar | Tab bar added, consistent with all other views |
 | `setDefaultConfigIfMissing` | `false` return from `getConfig()` not checked, preventing install-time defaults | Added `false` check to conditional |
+
+### FreePBX 17 conformance and code review round 2 (20-02-2026)
+
+| Issue | Impact | Resolution |
+|-------|--------|------------|
+| Contactmanager `addEntry` hook mismatch | Hook for `addEntry` would never fire on FreePBX 17 (method renamed to `addEntryByGroupID`) | Renamed hook to `hookContactmanager_addEntryByGroupID` in both `module.xml` and PHP |
+| Sipsettings in `BEFORE_STATE_READERS` | `Sipsettings::getConfig()` is a generic BMO helper, not a SIP-specific getter | Removed from `BEFORE_STATE_READERS` |
+| Missing GET-based delete capture | Ring Group deletes (and similar) triggered via GET redirects were not audited | Added `captureGuiGetActionEvent()` for state-changing GET actions |
+| Modules calling `exit()` before audit | Trunks, Misc Destinations call `redirect_standard()`/`exit()` before audit hook completes | `register_shutdown_function` safety net with deduplication flag |
+| `eventCapturedThisRequest` property placement | Property declared between docblock and method, could lead to stale state if BMO cached | Moved to class property section with explicit per-request reset |
+| Indentation inconsistency in `searchAuditEvents` | Filter block used one-tab indent inside a two-tab `try` block | Corrected to consistent two-tab indentation |
+| Indentation inconsistency in CSRF check | `page.auditcompliance.php` CSRF block missing one indent level | Corrected nesting indentation |
+| Missing `submit` in `STATE_CHANGING_PREFIXES` | Paging module uses `submit` as action name, not captured as state-changing | Added `submit`, `copy`, `duplicate` to prefixes |
+| Missing sensitive-read pages | `calendargroups` and `logfiles_settings` pages not monitored | Added to `SENSITIVE_READ_PAGES` |
+| PHP 8.2 `DateTime::getLastErrors()` returning `false` | `parseDateInput()` could fail on PHP 8.2+ | Added `false` check alongside empty array check |
 
 ---
 

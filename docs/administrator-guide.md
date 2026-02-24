@@ -15,12 +15,13 @@ Navigate to **Reports > Audit Compliance** in the FreePBX Web GUI. The module re
 `auditcompliance` section permission -- admins without this permission will see an "Access
 denied" message.
 
-The module has four views, accessible via a persistent tab bar present on all views:
+The module has five views, accessible via a persistent tab bar present on all views:
 
 1. **Dashboard** -- At-a-glance overview (default landing page)
 2. **Search** -- Multi-dimensional event search and export
 3. **Session Timeline** -- Chronological session-grouped view
 4. **Module Discovery** -- Installed module audit coverage report
+5. **Settings** -- Audit database connection configuration
 
 The active tab is highlighted on every view. Navigation between views is always one click away.
 
@@ -243,7 +244,69 @@ The bottom-right shows when the discovery scan was performed.
 
 ---
 
-## 5. Export
+## 5. Settings
+
+The Settings view provides a graphical interface for configuring the audit database connection,
+replacing the need for CLI-only `fwconsole setting` commands.
+
+### Connection Type
+
+Choose one of three connection modes:
+
+| Option | Description | When to Use |
+|--------|-------------|-------------|
+| **Direct MySQL/MariaDB** | Native PDO connection to MySQL/MariaDB | Standard enterprise deployments with MariaDB |
+| **Direct PostgreSQL** | Native PDO connection to PostgreSQL | Deployments using PostgreSQL as the audit backend |
+| **ODBC Connection** | Connect via system-level ODBC data source | When organization mandates centralized ODBC or driver-level TLS |
+
+### Connection Fields
+
+| Field | Description |
+|-------|-------------|
+| **Hostname** | Audit database server hostname or IP |
+| **Port** | Database port (default: 3306 for MySQL, 5432 for PostgreSQL) |
+| **Database Name** | Name of the audit database (default: `auditcompliance`) |
+| **Username** | Database user with INSERT + SELECT privileges |
+| **Password** | Database user password |
+| **Require TLS** | Enable/disable TLS enforcement (recommended: always on) |
+| **ODBC DSN Name** | (ODBC only) System DSN name from `/etc/odbc.ini` |
+| **ODBC Backend** | (ODBC only) Underlying engine: MySQL or PostgreSQL |
+
+### Connection Test
+
+Click **Test Connection** to verify database connectivity without saving. The module will:
+
+1. Attempt to connect using the provided parameters.
+2. Verify the connection is usable (runs a simple query).
+3. Report success or the specific error message.
+
+### Save
+
+Click **Save Settings** to persist the configuration. The module validates all inputs and
+stores them in the FreePBX config store. Changes take effect immediately on the next audit
+event.
+
+### Access Control
+
+Only administrators with the `auditcompliance` section permission can access and modify
+settings. The settings form is protected by independent CSRF token validation.
+
+---
+
+## 6. Export
+
+### Change Detail in Events
+
+When viewing event details (in Search or Session Timeline), changes are displayed with
+color-coded labels:
+
+- **Changed** (orange): Fields where the old value differs from the new value, shown as
+  "old → new".
+- **Added** (green): Fields that are new (not present in the previous state).
+- **Removed** (red): Fields that were present before but are absent now.
+
+For the first edit of an object (no prior baseline exists), all submitted fields are shown
+as "Added Fields."
 
 ### Formats
 

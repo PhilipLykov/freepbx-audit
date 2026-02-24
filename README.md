@@ -17,11 +17,13 @@ This helps with compliance, incident investigations, and internal control.
 
 ## Key points (non-technical)
 
-- **Immutable audit log**: records are append-only by design
+- **Immutable audit log**: records are append-only by design; no admin can edit or delete records
+- **Before/after change tracking**: shows exactly what was changed, with old and new values
 - **Remote database support**: works with MariaDB/PostgreSQL (including ODBC mode)
-- **Built-in GUI**: dashboard, search, session timeline, module discovery, settings
+- **Built-in GUI**: dashboard, search, session timeline, module discovery, settings (5 views)
+- **Settings GUI**: configure database connection graphically -- no CLI required
 - **Security-focused**: sensitive values are redacted, TLS can be enforced
-- **Works with FreePBX and pbxACT**: designed for production PBX environments
+- **Works with FreePBX 17 and pbxACT**: designed for production PBX environments
 
 ## Where to start
 
