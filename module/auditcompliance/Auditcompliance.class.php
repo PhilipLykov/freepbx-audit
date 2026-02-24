@@ -109,6 +109,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'blacklist' => array(
 			'calllog',
 		),
+		'allowlist' => array(
+			'calllog',
+		),
 		'logfiles' => array(
 			'log_file_read',
 		),
@@ -328,6 +331,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					'calendarid', 'eventid',
 					'destid', 'custom_exten', 'old_custom_exten',
 					'language_id', 'page_group', 'route_id', 'disa_id',
+					'number', 'oldval',
 					'username', 'displayname', 'name', 'description',
 				);
 				foreach ($candidates as $key) {
@@ -349,13 +353,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					try {
 						$previousPost = $self->getPreviousPostData($display, $objectId);
 						$changePayload = $self->buildChangePayload($requestSnapshot, $previousPost);
-						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)) {
+						if ($previousPost === null && in_array($effectiveAction, array('update', 'save', 'submit'), true)
+							&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)) {
 							$effectiveAction = 'create';
 						}
 						if ($effectiveAction === 'create' || $effectiveAction === 'add') {
 							$self->cacheModuleEntityNames($displayLower);
-							$objectId = $self->resolveObjectId($displayLower, $objectId);
 						}
+						$objectId = $self->resolveObjectId($displayLower, $objectId);
 					} catch (\Throwable $diffErr) {
 						// Fall back to generic payload
 					}
@@ -384,22 +389,27 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		});
 	}
 
+	private const ALWAYS_UPDATE_MODULES = array(
+		'featurecodeadmin', 'advancedsettings', 'sipsettings', 'iaxsettings',
+		'dahdiconfig', 'soundlang', 'pm2', 'sysadmin'
+	);
+
 	private function captureGuiPostEvent($sessionId, $display) {
 		try {
 			$action = $this->normalizeAction($_REQUEST['action'] ?? '', $_SERVER['REQUEST_METHOD'] ?? 'UNKNOWN');
 			$objectId = $this->detectObjectId();
+			$displayLower = strtolower((string) $display);
 			$previousPost = $this->getPreviousPostData($display, $objectId);
 
-			if ($previousPost === null && in_array($action, array('update', 'save', 'submit'), true)) {
+			if ($previousPost === null && in_array($action, array('update', 'save', 'submit'), true)
+				&& !in_array($displayLower, self::ALWAYS_UPDATE_MODULES, true)) {
 				$action = 'create';
 			}
 
-			$displayObjectId = $objectId;
 			if ($action === 'create' || $action === 'add') {
-				$displayLower = strtolower((string) $display);
 				$this->cacheModuleEntityNames($displayLower);
-				$displayObjectId = $this->resolveObjectId($displayLower, $objectId);
 			}
+			$displayObjectId = $this->resolveObjectId($displayLower, $objectId);
 
 			$this->routeEvent(array(
 				'session_id' => $sessionId,
@@ -612,6 +622,11 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'id' => null,
 			'name' => 'name',
 		),
+		'calendargroups' => array(
+			'method' => array('Calendar', 'listGroups'),
+			'id' => null,
+			'name' => 'name',
+		),
 		'customdests' => array(
 			'method' => array('Customappsreg', 'getAllCustomDests'),
 			'id' => 'destid',
@@ -642,9 +657,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'id' => 'page_group',
 			'name' => 'description',
 		),
+		'parking' => array(
+			'method' => array('Parking', 'getAllParkingLots'),
+			'id' => 'id',
+			'name' => 'name',
+		),
 		'miscdests' => array(
 			'method' => array('Miscdests', 'mdlist'),
-			'args' => array(true),
 			'id' => 'id',
 			'name' => 'description',
 		),
@@ -882,7 +901,8 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	private function getHookedModuleList() {
 		return array(
 			'core', 'userman', 'backup', 'certman', 'voicemail',
-			'timeconditions', 'contactmanager', 'ucp', 'calendar', 'bulkhandler'
+			'timeconditions', 'contactmanager', 'ucp', 'calendar', 'bulkhandler',
+			'miscdests'
 		);
 	}
 
@@ -1164,6 +1184,19 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		$this->captureHookEvent('calendar', 'sync', ...func_get_args());
 	}
 
+	// Tier 2: Misc Destinations hooks (uses redirect_standard → exit before our doConfigPageInit)
+	public function hookMiscdests_add() {
+		$this->captureEarlyExitEvent('miscdests', 'add');
+	}
+
+	public function hookMiscdests_del() {
+		$this->captureEarlyExitEvent('miscdests', 'delete');
+	}
+
+	public function hookMiscdests_update() {
+		$this->captureEarlyExitEvent('miscdests', 'edit');
+	}
+
 	// Tier 3: Bulk Handler hooks
 	public function hookBulkhandler_import() {
 		$this->captureHookEvent('bulkhandler', 'import', ...func_get_args());
@@ -1175,6 +1208,66 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 
 	public function hookBulkhandler_validate() {
 		$this->captureHookEvent('bulkhandler', 'validate', ...func_get_args());
+	}
+
+	/**
+	 * Captures events from modules that call redirect_standard() / exit()
+	 * in their own doConfigPageInit before our hook fires. BMO method hooks
+	 * fire DURING the module's processing (after the method completes, before
+	 * redirect), so they bypass the timing issue.
+	 */
+	private function captureEarlyExitEvent($moduleName, $action) {
+		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
+			return;
+		}
+		if ($this->eventCapturedThisRequest) {
+			return;
+		}
+		try {
+			$sessionId = $this->ensureSessionState();
+		} catch (\Throwable $e) {
+			return;
+		}
+
+		$objectId = $this->detectObjectId();
+		$displayLower = strtolower($moduleName);
+
+		if ($action === 'add' || $action === 'create') {
+			$this->cacheModuleEntityNames($displayLower);
+		}
+		$objectId = $this->resolveObjectId($displayLower, $objectId);
+
+		$previousPost = null;
+		$changePayload = array(
+			'before' => null, 'after' => null,
+			'added' => array(), 'removed' => array(),
+			'changed' => array('action' => $action, 'object_id' => $objectId)
+		);
+		if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? '')) === 'POST') {
+			try {
+				$previousPost = $this->getPreviousPostData($moduleName, $objectId);
+				$changePayload = $this->buildChangePayload($_REQUEST, $previousPost);
+			} catch (\Throwable $e) {
+				// Fall back to generic payload
+			}
+		}
+
+		$this->routeEvent(array(
+			'session_id' => (string) $sessionId,
+			'session_phase' => 'activity',
+			'channel' => 'gui',
+			'module_name' => $moduleName,
+			'action' => $action,
+			'outcome' => 'success',
+			'route' => $moduleName,
+			'object_type' => $displayLower,
+			'object_id' => $objectId,
+			'request_method' => $_SERVER['REQUEST_METHOD'] ?? 'POST',
+			'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
+			'request_hash' => $this->hashRequest($_REQUEST),
+			'change' => $changePayload
+		));
+		$this->eventCapturedThisRequest = true;
 	}
 
 	// ----------------------------------------------------------------
@@ -2014,6 +2107,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			'route_id', 'trunknum', 'file',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'disa_id',
+			'number', 'oldval',
 			'name', 'username',
 		);
 
@@ -2022,6 +2116,13 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			if (!empty($params)) {
 				if (isset($params['extensions']) && is_array($params['extensions']) && $params['extensions'] !== array()) {
 					return $this->truncate(implode(',', array_slice($params['extensions'], 0, 10)), 256);
+				}
+				if (isset($params['numbers']) && (string) $params['numbers'] !== '') {
+					$decoded = @json_decode((string) $params['numbers'], true);
+					if (is_array($decoded) && !empty($decoded)) {
+						return $this->truncate(implode(',', array_slice($decoded, 0, 10)), 256);
+					}
+					return $this->truncate((string) $params['numbers'], 256);
 				}
 				foreach ($candidates as $key) {
 					if (isset($params[$key]) && (string) $params[$key] !== '') {
@@ -2065,6 +2166,21 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 					$resolved[] = $this->truncate($name, 128);
 				}
 				$payload['target_ids'] = $resolved;
+			}
+			if (!empty($params['number'])) {
+				$payload['number'] = $this->truncate((string) $params['number'], 256);
+			}
+			if (!empty($params['description'])) {
+				$payload['description'] = $this->truncate((string) $params['description'], 256);
+			}
+			if (!empty($params['oldval'])) {
+				$payload['oldval'] = $this->truncate((string) $params['oldval'], 256);
+			}
+			if (!empty($params['numbers'])) {
+				$decoded = @json_decode((string) $params['numbers'], true);
+				if (is_array($decoded) && !empty($decoded)) {
+					$payload['target_numbers'] = array_slice($decoded, 0, 20);
+				}
 			}
 			if (!empty($params['name'])) {
 				$payload['name'] = $this->truncate((string) $params['name'], 256);
@@ -2298,7 +2414,7 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				}
 			}catch(e){}}
 			if(body&&typeof body==="string"){try{
-				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]"];
+				var idKeys=["id","ext","extension","extdisplay","account","user_id","trunkid","name","username","extensions[]","number","description","oldval","numbers"];
 				var bp2=new URLSearchParams(body);
 				var parts=[];
 				for(var ki=0;ki<idKeys.length;ki++){
@@ -2460,9 +2576,49 @@ JSEOF;
 			if (preg_match('/^[A-Z].*\d$/', $key)) {
 				continue;
 			}
+			if ($key === 'fc' && is_array($value)) {
+				$result = array_merge($result, $this->flattenFeatureCodes($value));
+				continue;
+			}
 			$result[$key] = $value;
 		}
 		return $result;
+	}
+
+	/**
+	 * Flatten the featurecodeadmin nested fc[module][feature] array
+	 * into a compact representation showing only enabled or customized codes.
+	 */
+	private function flattenFeatureCodes(array $fc) {
+		$flat = array();
+		foreach ($fc as $module => $features) {
+			if (!is_array($features)) {
+				continue;
+			}
+			foreach ($features as $feature => $settings) {
+				if (!is_array($settings)) {
+					continue;
+				}
+				$enabled = !empty($settings['enable']);
+				$customized = !empty($settings['customize']);
+				$code = (string) ($settings['code'] ?? '');
+				if ($enabled || $customized) {
+					$label = $module . '/' . $feature;
+					$parts = array();
+					if ($code !== '') {
+						$parts[] = $code;
+					}
+					if ($enabled) {
+						$parts[] = 'enabled';
+					}
+					if ($customized) {
+						$parts[] = 'custom';
+					}
+					$flat[$label] = implode(', ', $parts);
+				}
+			}
+		}
+		return $flat;
 	}
 
 	/**
@@ -3589,6 +3745,7 @@ JSEOF;
 			'calendarid', 'eventid',
 			'destid', 'custom_exten', 'old_custom_exten',
 			'language_id', 'page_group', 'route_id', 'disa_id',
+			'number', 'oldval',
 			'username', 'displayname', 'name', 'description',
 		);
 		foreach ($candidates as $key) {

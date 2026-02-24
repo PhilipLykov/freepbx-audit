@@ -81,6 +81,12 @@
 		<calendar class="Calendar" namespace="FreePBX\modules">
 			<method callingMethod="sync" class="Auditcompliance" namespace="FreePBX\modules">hookCalendar_sync</method>
 		</calendar>
+		<!-- Tier 2: Misc Destinations (uses redirect_standard/exit before GUI hook) -->
+		<miscdests class="Miscdests" namespace="FreePBX\modules">
+			<method callingMethod="add" class="Auditcompliance" namespace="FreePBX\modules">hookMiscdests_add</method>
+			<method callingMethod="del" class="Auditcompliance" namespace="FreePBX\modules">hookMiscdests_del</method>
+			<method callingMethod="update" class="Auditcompliance" namespace="FreePBX\modules">hookMiscdests_update</method>
+		</miscdests>
 		<!-- Tier 3: Bulk handler -->
 		<bulkhandler class="Bulkhandler" namespace="FreePBX\modules">
 			<method callingMethod="import" class="Auditcompliance" namespace="FreePBX\modules">hookBulkhandler_import</method>
