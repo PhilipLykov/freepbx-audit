@@ -544,6 +544,26 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 		'dahdiconfig', 'soundlang', 'pm2', 'sysadmin'
 	);
 
+	/**
+	 * FreePBX Core module display pages. Core owns multiple display names
+	 * that don't match its rawname ('core'). Used by captureHookEvent() to
+	 * map display → owning module so same-module hooks are suppressed while
+	 * cross-module hooks (side-effect entity creation) are recorded.
+	 * Source: FreePBX/core release/17.0 module.xml <menuitems>.
+	 */
+	private const CORE_DISPLAY_PAGES = array(
+		'extensions' => true,
+		'users' => true,
+		'devices' => true,
+		'did' => true,
+		'dahdichandids' => true,
+		'routing' => true,
+		'trunks' => true,
+		'advancedsettings' => true,
+		'ampusers' => true,
+		'astmodules' => true,
+	);
+
 	private function captureGuiPostEvent($sessionId, $display) {
 		try {
 			$requestData = is_array($this->originalRequestSnapshot)
@@ -1269,19 +1289,34 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 	/**
 	 * Generic hook handler for cross-module write interception.
 	 *
-	 * In web context (REQUEST_URI set) hooks are suppressed entirely because
-	 * the GUI channel (doConfigPageInit) and AJAX interceptor already capture
-	 * every admin action with user-facing names and full change details.
-	 * Hooks only fire in non-web contexts (CLI fwconsole, cron) where GUI/AJAX
-	 * channels are unavailable.
+	 * Suppression rules:
+	 *  - AJAX requests (ajax.php): fully suppressed -- the JS interceptor
+	 *    already captures every AJAX operation with complete change details.
+	 *  - GUI requests (config.php): suppressed only when the hook module
+	 *    matches the page-owning module (same entity, already captured by
+	 *    the GUI channel). Cross-module hooks fire because they represent
+	 *    side-effect entity creation in a different module (e.g. Userman
+	 *    user created as part of extension creation).
+	 *  - CLI / cron: all hooks fire (no GUI/AJAX channels available).
 	 */
 	public function captureHookEvent($callerModule, $callerMethod) {
 		if (empty($_SESSION['AMP_user']) || !is_object($_SESSION['AMP_user'])) {
 			return;
 		}
 
-		if (($_SERVER['REQUEST_URI'] ?? '') !== '') {
-			return;
+		$requestUri = $_SERVER['REQUEST_URI'] ?? '';
+		$isWebContext = ($requestUri !== '');
+		$display = '';
+
+		if ($isWebContext) {
+			if (strpos($requestUri, 'ajax.php') !== false) {
+				return;
+			}
+			$display = strtolower(trim((string) ($_REQUEST['display'] ?? '')));
+			$pageModule = isset(self::CORE_DISPLAY_PAGES[$display]) ? 'core' : $display;
+			if ($callerModule === $pageModule) {
+				return;
+			}
 		}
 
 		try {
@@ -1291,6 +1326,14 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 			}
 			$args = func_get_args();
 			$hookArgs = array_slice($args, 2);
+			$changePayload = array(
+				'before' => null, 'after' => null,
+				'added' => array(), 'removed' => array(),
+				'changed' => $this->flattenHookArgs($hookArgs)
+			);
+			if ($isWebContext && $display !== '') {
+				$changePayload['changed']['triggered_by'] = $display;
+			}
 			$this->routeEvent(array(
 				'session_id' => (string) $sessionId,
 				'session_phase' => 'activity',
@@ -1301,13 +1344,9 @@ class Auditcompliance extends FreePBX_Helpers implements BMO {
 				'route' => $callerModule . '::' . $callerMethod,
 				'object_type' => strtolower((string) $callerModule),
 				'object_id' => $this->extractObjectIdFromArgs($hookArgs),
-				'request_method' => 'CLI',
-				'request_uri' => '',
-				'change' => array(
-					'before' => null, 'after' => null,
-					'added' => array(), 'removed' => array(),
-					'changed' => $this->flattenHookArgs($hookArgs)
-				)
+				'request_method' => $isWebContext ? ($_SERVER['REQUEST_METHOD'] ?? 'POST') : 'CLI',
+				'request_uri' => $isWebContext ? $requestUri : '',
+				'change' => $changePayload
 			));
 		} catch (\Throwable $e) {
 			$this->debugLog('Hook audit failed', array(

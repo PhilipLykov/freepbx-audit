@@ -15,33 +15,40 @@ Enterprise-grade immutable compliance audit logging for FreePBX 17 / pbxACT Web 
 
 ## Quick Start
 
-1. Copy the module to your FreePBX server:
-   ```bash
-   cp -r auditcompliance /var/www/html/admin/modules/
-   ```
-2. Install and enable:
-   ```bash
-   fwconsole ma install auditcompliance
-   fwconsole reload
-   ```
-3. Configure a remote audit database (native PDO or ODBC):
-   ```bash
-   # Native PDO (MariaDB)
-   fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
-   fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
-   fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
-   fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+### Download
 
-   # Or via ODBC (system DSN defined in /etc/odbc.ini)
-   fwconsole setting AUDITCOMPLIANCE_DB_DSN "odbc:AuditDB"
-   fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
-   fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
-   fwconsole setting AUDITCOMPLIANCE_DB_ODBC_BACKEND "mysql"
-   ```
-4. Navigate to **Reports > Audit Compliance** in the Web GUI.
-5. The Dashboard shows real-time audit activity. Make any admin change and watch it appear.
+Get the latest release from GitHub:
+**https://github.com/PhilipLykov/freepbx-audit/releases/latest**
 
-For detailed setup including database creation, role hardening, TLS configuration, and RBAC,
+### Install via GUI
+
+1. Download `auditcompliance-17.0.0beta1.tar.gz` from the Releases page
+2. In FreePBX, go to **Admin > Module Admin > Upload Modules**
+3. Upload the `.tar.gz` file, click **Install**, then **Apply Config**
+
+### Install via CLI
+
+```bash
+cd /tmp
+wget https://github.com/PhilipLykov/freepbx-audit/releases/download/v17.0.0-beta1/auditcompliance-17.0.0beta1.tar.gz
+fwconsole ma installlocal /tmp/auditcompliance-17.0.0beta1.tar.gz
+fwconsole reload
+```
+
+### Configure
+
+Navigate to **Reports > Audit Compliance > Settings** and configure the remote audit database connection (MariaDB or PostgreSQL) with TLS. Alternatively, use the CLI:
+
+```bash
+fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=audit-db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
+fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
+fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<STRONG_PASSWORD>"
+fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
+```
+
+Navigate to **Reports > Audit Compliance** in the Web GUI. The Dashboard shows real-time audit activity. Make any admin change and watch it appear.
+
+For detailed setup including database creation, role hardening, TLS, ODBC, and RBAC,
 see the [Deployment Guide](../../docs/deployment-guide.md).
 
 ## Universal Capture Architecture
@@ -97,22 +104,13 @@ When the same action fires through multiple channels (e.g., a POST that triggers
 
 ## Installation
 
-See [docs/deployment-guide.md](../../docs/deployment-guide.md) for full instructions.
+See the [Deployment Guide](../../docs/deployment-guide.md) for full instructions including database preparation, ODBC, and RBAC.
 
-```bash
-cp -r auditcompliance /var/www/html/admin/modules/
-fwconsole ma install auditcompliance
-fwconsole reload
-```
-
-## Configuration
-
-```bash
-fwconsole setting AUDITCOMPLIANCE_DB_DSN "mysql:host=db.example.com;port=3306;dbname=auditcompliance;charset=utf8mb4"
-fwconsole setting AUDITCOMPLIANCE_DB_USER "audit_writer"
-fwconsole setting AUDITCOMPLIANCE_DB_PASSWORD "<password>"
-fwconsole setting AUDITCOMPLIANCE_DB_REQUIRE_TLS "1"
-```
+| Method | Command / Steps |
+|--------|-----------------|
+| **GUI Upload** | Download `.tar.gz` from [Releases](https://github.com/PhilipLykov/freepbx-audit/releases/latest) → **Admin > Module Admin > Upload Modules** → Install → Apply Config |
+| **CLI installlocal** | `wget <release-url> && fwconsole ma installlocal /tmp/auditcompliance-*.tar.gz && fwconsole reload` |
+| **CLI manual** | `tar xzf <archive> -C /var/www/html/admin/modules/ && fwconsole ma install auditcompliance && fwconsole reload` |
 
 ## pbxACT Commercial Module Support
 

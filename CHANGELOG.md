@@ -7,6 +7,10 @@ This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cross-module hook events now captured in web context** -- `captureHookEvent()` previously blanket-suppressed ALL BMO hooks during web requests, assuming the GUI channel already covered them. This caused side-effect entity creation to be silently lost -- e.g. when creating an extension with the "Create New User" option on the Extensions page, the Userman `addUserByDirectory` hook was suppressed and the user creation was never logged. The suppression now uses module-aware rules: same-module hooks are suppressed (e.g. `core::addUser` on `display=extensions`, since the GUI channel already captured the extension), but cross-module hooks fire (e.g. `userman::addUserByDirectory`, `contactmanager::addEntryByGroupID`) because they represent distinct entity creation in a different module. AJAX-context hooks remain fully suppressed (the JS interceptor handles those). New `CORE_DISPLAY_PAGES` constant maps Core module's 10 display pages (`extensions`, `users`, `devices`, `did`, `dahdichandids`, `routing`, `trunks`, `advancedsettings`, `ampusers`, `astmodules`) to rawname `core`. Web-context hook events now include proper `request_method`/`request_uri` and a `triggered_by` field in `change_changed` showing which display page triggered the side-effect.
+
 ## [17.0.0-beta1] - 25-02-2026
 
 ### Added

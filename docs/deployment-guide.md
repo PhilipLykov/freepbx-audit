@@ -57,20 +57,31 @@ SQL
 
 ## 2. Install the Module
 
+Download the release archive from:
+**https://github.com/PhilipLykov/freepbx-audit/releases/latest**
+
 ### Option A: FreePBX Module Admin (GUI)
 
-1. Package the module: `tar czf auditcompliance.tar.gz -C freepbx-audit/module auditcompliance`
+1. Download `auditcompliance-17.0.0beta1.tar.gz` from the GitHub Releases page
 2. Navigate to **Admin → Module Admin → Upload Modules**
-3. Upload `auditcompliance.tar.gz`
+3. Upload the `.tar.gz` file
 4. Click **Install** and then **Apply Config**
 
-### Option B: CLI Installation
+### Option B: CLI — `fwconsole ma installlocal`
 
 ```bash
-# Copy module to FreePBX modules directory
-cp -r freepbx-audit/module/auditcompliance /var/www/html/admin/modules/
+cd /tmp
+wget https://github.com/PhilipLykov/freepbx-audit/releases/download/v17.0.0-beta1/auditcompliance-17.0.0beta1.tar.gz
+fwconsole ma installlocal /tmp/auditcompliance-17.0.0beta1.tar.gz
+fwconsole reload
+```
 
-# Install via fwconsole
+### Option C: CLI — Manual Extract
+
+```bash
+cd /tmp
+wget https://github.com/PhilipLykov/freepbx-audit/releases/download/v17.0.0-beta1/auditcompliance-17.0.0beta1.tar.gz
+tar xzf auditcompliance-17.0.0beta1.tar.gz -C /var/www/html/admin/modules/
 fwconsole ma install auditcompliance
 fwconsole reload
 ```
@@ -294,12 +305,23 @@ Ensure TLS is configured on the database server:
 
 ## 8. Upgrade Procedure
 
+### Option A: GUI Upload
+
+1. Download the new release `.tar.gz` from https://github.com/PhilipLykov/freepbx-audit/releases/latest
+2. Navigate to **Admin → Module Admin → Upload Modules**
+3. Upload the archive — FreePBX will detect the existing module and offer an upgrade
+4. Click **Upgrade** and then **Apply Config**
+
+### Option B: CLI
+
 ```bash
 # Backup current module
 cp -r /var/www/html/admin/modules/auditcompliance /tmp/auditcompliance.bak
 
-# Deploy new version
-cp -r freepbx-audit/module/auditcompliance /var/www/html/admin/modules/
+# Download and install new version
+cd /tmp
+wget https://github.com/PhilipLykov/freepbx-audit/releases/download/v17.0.0-beta1/auditcompliance-17.0.0beta1.tar.gz
+tar xzf auditcompliance-17.0.0beta1.tar.gz -C /var/www/html/admin/modules/
 
 # Run module upgrade
 fwconsole ma upgrade auditcompliance
